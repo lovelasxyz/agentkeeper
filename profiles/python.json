@@ -1,0 +1,26 @@
+{
+  "id": "python",
+  "name": "Python and data work",
+  "description": "pip, uv, poetry, conda caches and Jupyter configuration.",
+  "reads": [
+    "file:~/.gitconfig",
+    "dir:~/.config/git",
+    "dir:~/.cache/pip",
+    "dir:~/Library/Caches/pip",
+    "dir:~/.cache/uv",
+    "dir:~/.cache/pypoetry",
+    "dir:~/.local/lib",
+    "dir:~/.pyenv/versions",
+    "dir:~/.jupyter",
+    "dir:~/.ipython",
+    "dir:~/.conda"
+  ],
+  "writes": [
+    "dir:~/.cache/pip",
+    "dir:~/Library/Caches/pip",
+    "dir:~/.cache/uv",
+    "dir:~/.cache/pypoetry",
+    "dir:~/.ipython"
+  ],
+  "network": ["tcp:443", "udp:53", "loopback"]
+}

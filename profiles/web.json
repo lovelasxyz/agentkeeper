@@ -1,0 +1,26 @@
+{
+  "id": "web",
+  "name": "Web development",
+  "description": "Node, package managers, git and the usual editor configuration.",
+  "reads": [
+    "file:~/.gitconfig",
+    "dir:~/.config/git",
+    "dir:~/.npm",
+    "dir:~/.cache/yarn",
+    "dir:~/Library/Caches/Yarn",
+    "dir:~/.cache/pnpm",
+    "dir:~/Library/pnpm",
+    "dir:~/.bun/install/cache",
+    "dir:~/.config/nvim",
+    "dir:~/.vscode/extensions",
+    "dir:~/.local/share/pnpm/store"
+  ],
+  "writes": [
+    "dir:~/.npm/_cacache",
+    "dir:~/.npm/_logs",
+    "dir:~/.cache/pnpm",
+    "dir:~/.cache/yarn",
+    "dir:~/Library/Caches/Yarn"
+  ],
+  "network": ["tcp:443", "udp:53", "loopback"]
+}

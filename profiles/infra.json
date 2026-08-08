@@ -1,0 +1,18 @@
+{
+  "id": "infra",
+  "name": "Infrastructure",
+  "description": "Terraform, Kubernetes and container tooling. Note what is NOT here: ~/.aws, ~/.kube and ~/.docker hold credentials and stay tier 2 — see README, \"The two tiers\".",
+  "reads": [
+    "file:~/.gitconfig",
+    "dir:~/.config/git",
+    "dir:~/.terraform.d/plugin-cache",
+    "dir:~/.cache/helm",
+    "dir:~/.krew",
+    "dir:~/.npm"
+  ],
+  "writes": [
+    "dir:~/.terraform.d/plugin-cache",
+    "dir:~/.cache/helm"
+  ],
+  "network": ["tcp:443", "udp:53", "loopback"]
+}

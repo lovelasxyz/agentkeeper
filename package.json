@@ -1,0 +1,62 @@
+{
+  "name": "agent-guard",
+  "version": "0.1.0",
+  "description": "Confine AI coding agents to what they need: OS-level sandboxing plus a thin detection layer. No Docker, no daemon in the cloud, no telemetry.",
+  "keywords": [
+    "ai-agent",
+    "security",
+    "sandbox",
+    "seatbelt",
+    "bubblewrap",
+    "prompt-injection",
+    "claude-code",
+    "supply-chain"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "agent-guard": "dist/presentation/cli/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "profiles",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
+    "clean": "rm -rf dist coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --project unit --project integration",
+    "test:watch": "vitest",
+    "test:sandbox": "vitest run --project sandbox",
+    "test:e2e": "vitest run --project e2e",
+    "test:all": "vitest run",
+    "coverage": "vitest run --project unit --project integration --coverage",
+    "lint:arch": "depcruise src --config .dependency-cruiser.cjs",
+    "verify": "npm run typecheck && npm run lint:arch && npm run coverage && npm run test:sandbox",
+    "prepack": "npm run clean && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^3.2.7",
+    "dependency-cruiser": "^16.9.0",
+    "fast-check": "^3.23.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  }
+}

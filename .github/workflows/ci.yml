@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Layer 1 on Linux needs bubblewrap. Without it the sandbox suite would
+      # skip silently, which is exactly the kind of quiet gap this project is
+      # about.
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - run: npm ci
+      - run: npm run typecheck
+
+      - name: Architecture boundaries
+        run: npm run lint:arch
+
+      - name: Unit and integration tests with coverage thresholds
+        run: npm run coverage
+
+      - run: npm run build
+
+      # The tests that decide whether the product works: a real process under
+      # the real mechanism, checking that forbidden things actually fail.
+      - name: Sandbox isolation tests
+        run: npm run test:sandbox
+
+      - name: End-to-end install lifecycle
+        run: npm run test:e2e
+
+      # Dogfooding: the tool scans its own repository.
+      - name: Self-scan
+        run: node dist/presentation/cli/main.js scan .
+
+  package:
+    name: package contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm pack --dry-run
+
+      - name: Refuse a postinstall script
+        run: |
+          if node -e "process.exit(require('./package.json').scripts.postinstall ? 0 : 1)"; then
+            echo "package.json defines postinstall — that is the ChainDrop signature" >&2
+            exit 1
+          fi
+
+      - name: Refuse runtime dependencies
+        run: |
+          count=$(node -e "console.log(Object.keys(require('./package.json').dependencies || {}).length)")
+          if [ "$count" -gt 8 ]; then
+            echo "more than 8 direct runtime dependencies" >&2
+            exit 1
+          fi

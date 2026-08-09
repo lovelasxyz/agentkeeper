@@ -6,7 +6,7 @@ import type { Command } from '../Command.js';
 const READ_TIMEOUT_MS = 2_000;
 
 /**
- * `agent-guard hook pretooluse` — entry point E3 (spec §5).
+ * `agentkeeper hook pretooluse` — entry point E3 (spec §5).
  *
  * Two properties matter more than features here.
  *
@@ -23,14 +23,17 @@ export class HookCommand implements Command {
 
   async execute(args: readonly string[]): Promise<number> {
     if (args[0] !== 'pretooluse') {
-      process.stderr.write('Usage: agent-guard hook pretooluse\n');
+      process.stderr.write('Usage: agentkeeper hook pretooluse\n');
       return 1;
     }
 
-    const container = new Container({ quiet: true, interactive: false });
     let strict = false;
 
     try {
+      // Inside the try on purpose: constructing the container reads the
+      // environment, and a broken HOME must not turn into a failed tool call.
+      // Fail-open covers our own start-up too, not just our rules.
+      const container = new Container({ quiet: true, interactive: false });
       strict = (await container.config()).strictMode;
 
       const payload = parse(await readStdin());
@@ -40,7 +43,7 @@ export class HookCommand implements Command {
         tool: payload.tool_name,
         input: payload.tool_input,
         context: {
-          home: container.files.realPath(container.environment.home),
+          home: container.files.realPath(container.environment.identityHome),
           workspace: container.files.realPath(
             payload.cwd === undefined
               ? container.environment.cwd
@@ -68,7 +71,7 @@ export class HookCommand implements Command {
       return 0;
     } catch (error) {
       if (strict) {
-        process.stderr.write(`agent-guard: hook failed: ${(error as Error).message}\n`);
+        process.stderr.write(`agentkeeper: hook failed: ${(error as Error).message}\n`);
         return 1;
       }
       // Fail-open: an internal error must not become the agent's problem.

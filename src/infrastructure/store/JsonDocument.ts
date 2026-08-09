@@ -6,7 +6,7 @@ export interface VersionedDocument {
 }
 
 /**
- * Shared plumbing for the versioned JSON files in `~/.agent-guard` (spec §10.4).
+ * Shared plumbing for the versioned JSON files in `~/.agentkeeper` (spec §10.4).
  *
  * A store that cannot be read is treated as empty rather than fatal, with one
  * exception made explicit at each call site: the allowlist. A corrupt allowlist
@@ -62,7 +62,7 @@ export class CorruptStoreError extends Error {
     reason: string,
   ) {
     super(
-      `${path.value} could not be read (${reason}). agent-guard will not guess what it meant; ` +
+      `${path.value} could not be read (${reason}). agentkeeper will not guess what it meant; ` +
         'fix the file or delete it to start from the default policy.',
     );
     this.name = 'CorruptStoreError';

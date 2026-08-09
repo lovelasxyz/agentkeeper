@@ -93,7 +93,7 @@ describe('security invariant: tier 2 is unreachable at runtime (spec §4.5, §9.
           context: CTX,
           workspaceId: WORKSPACE_ID,
           toolchainRoots: [],
-          stateDir: HOME.join('.agent-guard'),
+          stateDir: HOME.join('.agentkeeper'),
           agentStateDirs: [HOME.join('.claude')],
           tempDirs: [AbsolutePath.of('/tmp')],
         });
@@ -129,7 +129,7 @@ describe('security invariant: tier 2 is unreachable at runtime (spec §4.5, §9.
       context: CTX,
       workspaceId: WORKSPACE_ID,
       toolchainRoots: [],
-      stateDir: HOME.join('.agent-guard'),
+      stateDir: HOME.join('.agentkeeper'),
       agentStateDirs: [],
       tempDirs: [],
     });
@@ -161,5 +161,62 @@ describe('ContentHash is a pure function (spec §9.6)', () => {
         a === b || !ContentHash.fromContent(a).equals(ContentHash.fromContent(b)),
       ),
     );
+  });
+});
+
+describe('policyHash identifies the enforced policy (spec §31, §41)', () => {
+  function build(input: Partial<Parameters<PolicyBuilder['build']>[0]> = {}) {
+    return builder.build({
+      profile: EMPTY_PROFILE,
+      grants: [],
+      context: CTX,
+      workspaceId: WORKSPACE_ID,
+      toolchainRoots: [],
+      stateDir: HOME.join('.agentkeeper'),
+      agentStateDirs: [],
+      tempDirs: [],
+      ...input,
+    }).policy;
+  }
+
+  it('is stable for an identically built policy', () => {
+    expect(build().policyHash).toBe(build().policyHash);
+    expect(build().policyHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('changes when a readable root is added', () => {
+    const widened = build({ toolchainRoots: [AbsolutePath.of('/opt/homebrew')] });
+    expect(widened.policyHash).not.toBe(build().policyHash);
+  });
+
+  it('changes when a network destination is added', () => {
+    const online = build({
+      profile: StarterProfile.fromSpec({
+        id: 'online',
+        name: 'Online',
+        description: 'one destination',
+        reads: [],
+        writes: [],
+        network: ['api.anthropic.com:443'],
+      }),
+    });
+    expect(online.policyHash).not.toBe(build().policyHash);
+  });
+
+  it('ignores the order the same rules were assembled in', () => {
+    const roots = [AbsolutePath.of('/opt/one'), AbsolutePath.of('/opt/two')];
+    expect(build({ toolchainRoots: roots }).policyHash).toBe(
+      build({ toolchainRoots: [...roots].reverse() }).policyHash,
+    );
+  });
+
+  it('does not change when a broker transport is attached at launch', () => {
+    const policy = build();
+    expect(
+      policy.withNetworkEnforcement({
+        kind: 'brokered',
+        transport: { kind: 'tcp-loopback', port: 51_234 },
+      }).policyHash,
+    ).toBe(policy.policyHash);
   });
 });

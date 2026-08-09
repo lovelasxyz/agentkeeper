@@ -51,8 +51,8 @@ describe('ShellCommand', () => {
   });
 
   it('collects environment assignments', () => {
-    expect(ShellCommand.parse('AGENT_GUARD_BYPASS=1 claude').assignments()).toEqual({
-      AGENT_GUARD_BYPASS: '1',
+    expect(ShellCommand.parse('AGENTKEEPER_BYPASS=1 claude').assignments()).toEqual({
+      AGENTKEEPER_BYPASS: '1',
     });
   });
 
@@ -147,17 +147,17 @@ describe('family B — refusals', () => {
   });
 
   it('AG-B005 blocks editing the allowlist', () => {
-    expect(blockIds(call('Write', { file_path: '~/.agent-guard/allowlist.json' }))).toContain(
+    expect(blockIds(call('Write', { file_path: '~/.agentkeeper/allowlist.json' }))).toContain(
       'AG-B005',
     );
   });
 
   it('AG-B005 blocks revoking grants through the CLI', () => {
-    expect(blockIds(bash('agent-guard grants --revoke abc123'))).toContain('AG-B005');
+    expect(blockIds(bash('agentkeeper grants --revoke abc123'))).toContain('AG-B005');
   });
 
   it('AG-B006 blocks relaunching with the bypass variable', () => {
-    expect(blockIds(bash('AGENT_GUARD_BYPASS=1 claude'))).toContain('AG-B006');
+    expect(blockIds(bash('AGENTKEEPER_BYPASS=1 claude'))).toContain('AG-B006');
   });
 
   it('every family B rule refuses rather than asks', () => {

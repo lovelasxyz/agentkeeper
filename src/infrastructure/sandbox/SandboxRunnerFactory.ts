@@ -1,6 +1,7 @@
 import { BubblewrapRunner } from './BubblewrapRunner.js';
 import { NoopRunner } from './NoopRunner.js';
 import { SeatbeltRunner } from './SeatbeltRunner.js';
+import { WindowsSandboxRunner } from './WindowsSandboxRunner.js';
 import type { SandboxRunner } from '../../application/ports/SandboxRunner.js';
 import type { Platform } from '../../domain/value-objects/Platform.js';
 
@@ -16,11 +17,13 @@ export class SandboxRunnerFactory {
     private readonly candidates: readonly SandboxRunner[] = [
       new SeatbeltRunner(),
       new BubblewrapRunner(),
+      new WindowsSandboxRunner(),
     ],
   ) {}
 
-  async forPlatform(_platform: Platform): Promise<SandboxRunner | null> {
+  async forPlatform(platform: Platform): Promise<SandboxRunner | null> {
     for (const candidate of this.candidates) {
+      if (!matchesPlatform(candidate, platform)) continue;
       if (await candidate.isAvailable()) return candidate;
     }
     return null;
@@ -28,5 +31,18 @@ export class SandboxRunnerFactory {
 
   unconfined(): SandboxRunner {
     return new NoopRunner();
+  }
+}
+
+function matchesPlatform(candidate: SandboxRunner, platform: Platform): boolean {
+  switch (candidate.capabilities.mechanism) {
+    case 'seatbelt':
+      return platform === 'darwin';
+    case 'bubblewrap':
+      return platform === 'linux';
+    case 'appcontainer':
+      return platform === 'win32';
+    case 'none':
+      return false;
   }
 }

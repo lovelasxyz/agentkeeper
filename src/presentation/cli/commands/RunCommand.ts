@@ -3,7 +3,7 @@ import { UnsafeWorkspaceError } from '../../../domain/policy/PolicyBuilder.js';
 import { Flags, type Command } from '../Command.js';
 
 /**
- * `agent-guard run -- <command>` (spec §4.6).
+ * `agentkeeper run -- <command>` (spec §4.6).
  *
  * Fail-closed. Every path out of here either starts the command under a policy
  * or prints why it did not; there is no path that starts it unprotected while
@@ -21,14 +21,8 @@ export class RunCommand implements Command {
 
     const [executable, ...rest] = target;
     if (executable === undefined) {
-      process.stderr.write('Usage: agent-guard run -- <command> [args...]\n');
+      process.stderr.write('Usage: agentkeeper run -- <command> [args...]\n');
       return 1;
-    }
-
-    // The user's own escape hatch, from their own shell. AG-B006 refuses the
-    // same variable when it comes from inside the agent.
-    if (process.env['AGENT_GUARD_BYPASS'] !== undefined) {
-      process.stderr.write('agent-guard: AGENT_GUARD_BYPASS is set — running without isolation.\n');
     }
 
     const container = new Container();
@@ -39,16 +33,16 @@ export class RunCommand implements Command {
       const outcome = await useCase.execute({
         executable,
         args: rest,
-        profile: await container.profiles().load(flags.value('profile') ?? config.starterProfile),
+        profile: await (await container.profiles()).load(flags.value('profile') ?? config.starterProfile),
         onUnavailable: config.onUnavailable,
       });
       return outcome.exitCode;
     } catch (error) {
       if (error instanceof UnsafeWorkspaceError) {
-        process.stderr.write(`agent-guard: ${error.message}\n`);
+        process.stderr.write(`agentkeeper: ${error.message}\n`);
         return 78; // EX_CONFIG
       }
-      process.stderr.write(`agent-guard: ${(error as Error).message}\n`);
+      process.stderr.write(`agentkeeper: ${(error as Error).message}\n`);
       return 1;
     }
   }

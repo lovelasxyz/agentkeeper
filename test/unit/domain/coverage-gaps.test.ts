@@ -217,6 +217,19 @@ describe('StarterProfile', () => {
     ).toThrow(/network/i);
   });
 
+  it('rejects a network rule without legacy protocol or destination syntax', () => {
+    expect(() =>
+      StarterProfile.fromSpec({
+        id: 'x',
+        name: 'x',
+        description: 'y',
+        reads: [],
+        writes: [],
+        network: ['not-a-rule'],
+      }),
+    ).toThrow(/unknown network rule/i);
+  });
+
   it('accepts a wildcard port', () => {
     const profile = StarterProfile.fromSpec({
       id: 'x',

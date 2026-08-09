@@ -1,11 +1,6 @@
 import { AccessTierResolver } from '../domain/policy/AccessTierResolver.js';
 import { PolicyBuilder } from '../domain/policy/PolicyBuilder.js';
 import { SensitivePathRegistry } from '../domain/paths/SensitivePathRegistry.js';
-import { RuleRegistry } from '../domain/rules/RuleRegistry.js';
-import { ScanEngine } from '../domain/services/ScanEngine.js';
-import { ARTIFACT_RULES } from '../domain/rules/artifact/index.js';
-import { actionRules, blockingRules } from '../domain/rules/toolcall/index.js';
-import { PERSISTENCE_RULES } from '../domain/rules/persistence/index.js';
 
 import { NodeFileSystem } from '../infrastructure/fs/NodeFileSystem.js';
 import {
@@ -23,26 +18,39 @@ import {
   SystemClock,
   TerminalPrompter,
 } from '../infrastructure/adapters.js';
-import { SandboxRunnerFactory } from '../infrastructure/sandbox/SandboxRunnerFactory.js';
 import { Configuration } from '../infrastructure/config/Configuration.js';
-import { ProfileLoader } from '../infrastructure/config/ProfileLoader.js';
 
-import { RunSandboxed } from '../application/use-cases/RunSandboxed.js';
-import { EvaluateToolCall } from '../application/use-cases/EvaluateToolCall.js';
-import { ScanWorkspace } from '../application/use-cases/ScanWorkspace.js';
 import { GrantAccess } from '../application/use-cases/GrantAccess.js';
 import { ApplyChanges } from '../application/use-cases/ApplyChanges.js';
 
-import type { AbsolutePath } from '../domain/value-objects/AbsolutePath.js';
+import { AbsolutePath } from '../domain/value-objects/AbsolutePath.js';
+import type { ScanEngine } from '../domain/services/ScanEngine.js';
+import type { RunSandboxed } from '../application/use-cases/RunSandboxed.js';
+import type { EvaluateToolCall } from '../application/use-cases/EvaluateToolCall.js';
+import type { ScanWorkspace } from '../application/use-cases/ScanWorkspace.js';
+import type { ReviewFindings } from '../application/use-cases/ReviewFindings.js';
+import type { ProfileLoader } from '../infrastructure/config/ProfileLoader.js';
+import type { DesktopNotifier as Notifier } from '../infrastructure/adapters.js';
 import type { Artifact } from '../domain/entities/Artifact.js';
 import type { BaselineChange } from '../domain/entities/BaselineChange.js';
 import type { ToolCall } from '../domain/entities/ToolCall.js';
 import type { Logger, Prompter, SandboxRunner } from '../application/ports/index.js';
+import type { TransactionalProtectionInstallationExecutor } from '../application/use-cases/ExecuteProtectionInstallation.js';
+import type {
+  ManagedAgent,
+} from '../infrastructure/install/ManagedInstallation.js';
+import type { ProtectionInstallationPlanner } from '../infrastructure/install/ProtectionInstallation.js';
 
 export interface ContainerOptions {
   /** Hooks write structured JSON to stdout; a stray log line would corrupt it. */
   readonly quiet?: boolean;
   readonly interactive?: boolean;
+}
+
+export interface ManagedInstallationComponents {
+  readonly planner: ProtectionInstallationPlanner;
+  readonly executor: TransactionalProtectionInstallationExecutor;
+  readonly agents: readonly ManagedAgent[];
 }
 
 /**
@@ -79,14 +87,14 @@ export class Container {
     this.tiers = new AccessTierResolver(this.paths);
     this.policies = new PolicyBuilder(this.tiers, this.paths);
 
-    this.grants = new JsonGrantStore(this.files, this.stateDir, this.environment.home);
+    this.grants = new JsonGrantStore(this.files, this.stateDir, this.environment.identityHome);
     this.decisions = new JsonDecisionStore(this.files, this.stateDir);
     this.baseline = new JsonBaselineStore(this.files, this.stateDir);
     this.audit = new JsonlAuditLog(this.files, this.stateDir);
   }
 
   get stateDir(): AbsolutePath {
-    return this.environment.home.join('.agent-guard');
+    return this.environment.identityHome.join('.agentkeeper');
   }
 
   get backupDir(): AbsolutePath {
@@ -98,36 +106,60 @@ export class Container {
     return this.configuration;
   }
 
-  profiles(): ProfileLoader {
+  async profiles(): Promise<ProfileLoader> {
+    const { ProfileLoader } = await import('../infrastructure/config/ProfileLoader.js');
     return new ProfileLoader(this.files);
   }
 
-  notifier(): DesktopNotifier {
+  notifier(): Notifier {
     return new DesktopNotifier(this.environment.platform, this.logger);
   }
 
   async sandboxRunner(): Promise<SandboxRunner | null> {
     const config = await this.config();
     if (!config.sandboxEnabled) return null;
+    const { SandboxRunnerFactory } = await import(
+      '../infrastructure/sandbox/SandboxRunnerFactory.js'
+    );
     return new SandboxRunnerFactory().forPlatform(this.environment.platform);
   }
 
-  artifactScanner(): ScanEngine<Artifact> {
+  async artifactScanner(): Promise<ScanEngine<Artifact>> {
+    const [{ ScanEngine }, { RuleRegistry }, { ARTIFACT_RULES }] = await Promise.all([
+      import('../domain/services/ScanEngine.js'),
+      import('../domain/rules/RuleRegistry.js'),
+      import('../domain/rules/artifact/index.js'),
+    ]);
     return new ScanEngine(RuleRegistry.of(ARTIFACT_RULES));
   }
 
-  toolCallScanner(includeActions: boolean): ScanEngine<ToolCall> {
+  async toolCallScanner(includeActions: boolean): Promise<ScanEngine<ToolCall>> {
+    const [{ ScanEngine }, { RuleRegistry }, toolcall] = await Promise.all([
+      import('../domain/services/ScanEngine.js'),
+      import('../domain/rules/RuleRegistry.js'),
+      import('../domain/rules/toolcall/index.js'),
+    ]);
     const rules = includeActions
-      ? [...blockingRules(this.tiers), ...actionRules()]
-      : blockingRules(this.tiers);
+      ? [...toolcall.blockingRules(this.tiers), ...toolcall.actionRules()]
+      : toolcall.blockingRules(this.tiers);
     return new ScanEngine(RuleRegistry.of(rules));
   }
 
-  persistenceScanner(): ScanEngine<BaselineChange> {
+  async persistenceScanner(): Promise<ScanEngine<BaselineChange>> {
+    const [{ ScanEngine }, { RuleRegistry }, { PERSISTENCE_RULES }] = await Promise.all([
+      import('../domain/services/ScanEngine.js'),
+      import('../domain/rules/RuleRegistry.js'),
+      import('../domain/rules/persistence/index.js'),
+    ]);
     return new ScanEngine(RuleRegistry.of(PERSISTENCE_RULES));
   }
 
   async runSandboxed(): Promise<RunSandboxed> {
+    const [{ RunSandboxed }, { SandboxRunnerFactory }, { NodeDestinationBroker }] = await Promise.all([
+      import('../application/use-cases/RunSandboxed.js'),
+      import('../infrastructure/sandbox/SandboxRunnerFactory.js'),
+      import('../infrastructure/network/NodeDestinationBroker.js'),
+    ]);
     return new RunSandboxed(
       await this.sandboxRunner(),
       new SandboxRunnerFactory().unconfined(),
@@ -138,13 +170,17 @@ export class Container {
       this.audit,
       this.clock,
       this.logger,
+      new NodeDestinationBroker(),
     );
   }
 
   async evaluateToolCall(): Promise<EvaluateToolCall> {
-    const config = await this.config();
+    const [{ EvaluateToolCall }, config] = await Promise.all([
+      import('../application/use-cases/EvaluateToolCall.js'),
+      this.config(),
+    ]);
     return new EvaluateToolCall(
-      this.toolCallScanner(config.isEnabled('categoryA')),
+      await this.toolCallScanner(config.isEnabled('categoryA')),
       this.decisions,
       this.audit,
       this.clock,
@@ -153,12 +189,19 @@ export class Container {
   }
 
   async scanWorkspace(): Promise<ScanWorkspace> {
+    const { ScanWorkspace } = await import('../application/use-cases/ScanWorkspace.js');
     return new ScanWorkspace(
       this.files,
-      this.artifactScanner(),
+      await this.artifactScanner(),
       this.decisions,
       await this.config(),
+      this.clock,
     );
+  }
+
+  async reviewFindings(): Promise<ReviewFindings> {
+    const { ReviewFindings } = await import('../application/use-cases/ReviewFindings.js');
+    return new ReviewFindings(this.prompter, this.decisions, this.audit, this.clock);
   }
 
   grantAccess(): GrantAccess {
@@ -167,5 +210,89 @@ export class Container {
 
   applyChanges(): ApplyChanges {
     return new ApplyChanges(this.files, this.backupDir, this.audit, this.clock);
+  }
+
+  /** Resolves original agent binaries before managed shims are placed on PATH. */
+  async managedInstallation(): Promise<ManagedInstallationComponents> {
+    const [
+      { resolve },
+      { ExecutableResolver },
+      managed,
+      fileExecution,
+      protection,
+      protectionExecution,
+      system,
+    ] = await Promise.all([
+      import('node:path'),
+      import('../infrastructure/system/ExecutableResolver.js'),
+      import('../infrastructure/install/ManagedInstallation.js'),
+      import('../application/use-cases/ExecuteInstallationPlan.js'),
+      import('../infrastructure/install/ProtectionInstallation.js'),
+      import('../application/use-cases/ExecuteProtectionInstallation.js'),
+      import('../infrastructure/install/SystemIntegrationAdapters.js'),
+    ]);
+    const home = this.files.realPath(this.environment.identityHome);
+    const stateDir = home.join('.agentkeeper');
+    const shimRoot = stateDir.join('shims');
+    const resolver = new ExecutableResolver();
+    const resolved = await resolver.resolveMany(
+      managed.MANAGED_AGENTS,
+      this.environment.variables['PATH'] ?? '',
+      [shimRoot],
+    );
+    const agentExecutables = Object.fromEntries(
+      managed.MANAGED_AGENTS.flatMap((agent) => {
+        const target = resolved[agent];
+        return target === undefined ? [] : [[agent, target]];
+      }),
+    ) as Readonly<Partial<Record<ManagedAgent, AbsolutePath>>>;
+    const binaryArgument = process.argv[1];
+    if (binaryArgument === undefined) {
+      throw new Error('Cannot resolve the agentkeeper CLI entry point.');
+    }
+    const agentkeeperEntrypoint = this.files.realPath(AbsolutePath.of(resolve(binaryArgument)));
+    const runtimeExecutable = this.files.realPath(AbsolutePath.of(process.execPath));
+    const powershell = this.environment.platform === 'win32';
+    const profiles = powershell
+      ? [
+          home.join('Documents/PowerShell/Microsoft.PowerShell_profile.ps1'),
+          home.join('Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1'),
+        ]
+      : [home.join('.zshrc'), home.join('.bashrc')];
+    const baseOptions = {
+      home,
+      stateDir,
+      shell: powershell ? 'powershell' : 'posix',
+      runtimeExecutable,
+      agentkeeperEntrypoint,
+      agentExecutables,
+      profiles,
+      claudeSettings: home.join('.claude/settings.json'),
+    } as const;
+    const processes = new system.NodeInstallationProcessExecutor();
+    const git = new system.ProcessGitConfigurationController(processes);
+    const service = new system.PlatformServiceController(processes, {
+      ...(this.environment.platform === 'darwin' && typeof process.getuid === 'function'
+        ? { launchdDomain: `gui/${process.getuid()}` }
+        : {}),
+    });
+    const planner = new protection.ProtectionInstallationPlanner(
+      this.files,
+      baseOptions,
+      this.environment.platform,
+      service,
+      git,
+    );
+    return {
+      planner,
+      executor: new protectionExecution.TransactionalProtectionInstallationExecutor(
+        new fileExecution.TransactionalInstallationExecutor(this.files),
+        service,
+        git,
+      ),
+      agents: Object.freeze(
+        managed.MANAGED_AGENTS.filter((agent) => agentExecutables[agent] !== undefined),
+      ),
+    };
   }
 }

@@ -2,11 +2,11 @@ import { Container } from '../../../composition/Container.js';
 import { Palette } from '../../messages/render.js';
 import { Flags, type Command } from '../Command.js';
 
-/** `agent-guard log [--since 24h]` — the append-only record (spec §10.2). */
+/** `agentkeeper log [--since 24h]` — the append-only record (spec §10.2). */
 export class LogCommand implements Command {
   readonly name = 'log';
   readonly usage = 'log [--since 24h|7d]';
-  readonly summary = 'Show what agent-guard recorded';
+  readonly summary = 'Show what agentkeeper recorded';
 
   async execute(args: readonly string[]): Promise<number> {
     const flags = Flags.parse(args);

@@ -5,6 +5,7 @@ const ALL = PLATFORMS;
 const POSIX = POSIX_PLATFORMS;
 const MAC = ['darwin'] as const;
 const LINUX = ['linux'] as const;
+const WINDOWS = ['win32'] as const;
 
 /**
  * The single source of truth behind the B and P rule families and behind the
@@ -24,7 +25,7 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     writeTier: 2,
     onRead: 'block',
     onWrite: 'block',
-    platforms: POSIX,
+    platforms: ALL,
     rationale: 'Private keys grant access to every host and repository the user can reach.',
   },
   {
@@ -218,6 +219,39 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     platforms: POSIX,
     rationale: 'logins.json and cookies.sqlite hold decryptable saved credentials.',
   },
+  {
+    id: 'chrome-profile-windows',
+    pattern: '~/appdata/local/google/chrome/user data/**',
+    category: 'credential',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: WINDOWS,
+    rationale: 'Chrome cookies and saved sessions provide authenticated access to web services.',
+  },
+  {
+    id: 'edge-profile-windows',
+    pattern: '~/appdata/local/microsoft/edge/user data/**',
+    category: 'credential',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: WINDOWS,
+    rationale: 'Edge cookies and saved sessions provide authenticated access to web services.',
+  },
+  {
+    id: 'firefox-profile-windows',
+    pattern: '~/appdata/roaming/mozilla/firefox/**',
+    category: 'credential',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: WINDOWS,
+    rationale: 'Firefox profiles contain saved logins, cookies and authenticated sessions.',
+  },
 
   // ── Persistence (vector V9) ────────────────────────────────────────────────
   {
@@ -319,7 +353,7 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     writeTier: 2,
     onRead: 'block',
     onWrite: 'block',
-    platforms: POSIX,
+    platforms: ALL,
     rationale: 'Appending a key grants permanent remote access to the machine.',
   },
   {
@@ -330,7 +364,7 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     writeTier: 2,
     onRead: 'block',
     onWrite: 'block',
-    platforms: POSIX,
+    platforms: ALL,
     rationale: 'ProxyCommand and LocalCommand execute on every outgoing connection.',
   },
   {
@@ -354,6 +388,39 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     onWrite: 'block',
     platforms: LINUX,
     rationale: 'A user unit starts at login and restarts itself on failure.',
+  },
+  {
+    id: 'powershell-core-profile',
+    pattern: '~/documents/powershell/**',
+    category: 'persistence',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: WINDOWS,
+    rationale: 'PowerShell profile scripts execute whenever a PowerShell session starts.',
+  },
+  {
+    id: 'windows-powershell-profile',
+    pattern: '~/documents/windowspowershell/**',
+    category: 'persistence',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: WINDOWS,
+    rationale: 'Windows PowerShell profile scripts execute whenever a legacy session starts.',
+  },
+  {
+    id: 'windows-startup-folder',
+    pattern: '~/appdata/roaming/microsoft/windows/start menu/programs/startup/**',
+    category: 'persistence',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: WINDOWS,
+    rationale: 'Programs placed in the per-user Startup folder execute at every login.',
   },
   {
     id: 'crontab-macos',
@@ -424,7 +491,7 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     rationale: 'REPL sessions frequently contain pasted keys.',
   },
 
-  // ── Agent and agent-guard configuration (vectors V2, V8; rules B003/B005) ──
+  // ── Agent and agentkeeper configuration (vectors V2, V8; rules B003/B005) ──
   {
     id: 'claude-settings',
     pattern: '~/.claude/settings*.json',
@@ -470,8 +537,8 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     rationale: 'MCP server definitions execute an arbitrary command at session start.',
   },
   {
-    id: 'agent-guard-state',
-    pattern: '~/.agent-guard/**',
+    id: 'agentkeeper-state',
+    pattern: '~/.agentkeeper/**',
     category: 'persistence',
     readTier: 1,
     writeTier: 2,

@@ -6,29 +6,103 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  verify:
+    name: release verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-
-      # Trusted publishing needs npm >= 11.5.1.
-      - run: npm install -g npm@latest
-
+          node-version: '22.21.0'
+          cache: npm
+      - name: Configure MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint:arch
-      - run: npm test
+      - run: npm run coverage
+      - run: npm run clean
       - run: npm run build
-      - run: npm run test:e2e
+      - run: npm run test:sandbox
+      - name: End-to-end install lifecycle
+        if: runner.os != 'Windows'
+        run: npm run test:e2e
+      - name: Upload Windows x64 boundary
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-sandbox-x64
+          path: dist/native/win32-x64/agentkeeper-sandbox.exe
+          if-no-files-found: error
 
-      # No NODE_AUTH_TOKEN: the OIDC trusted publisher provides the credential,
-      # and provenance is generated automatically.
-      - run: npm publish
+  windows-arm64:
+    name: release Windows ARM64 boundary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.21.0'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+      - run: node scripts/build-windows-sandbox.mjs arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-sandbox-arm64
+          path: dist/native/win32-arm64/agentkeeper-sandbox.exe
+          if-no-files-found: error
+
+  publish:
+    name: npm trusted publish
+    needs: [verify, windows-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.21.0'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run clean
+      - run: npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows-sandbox-x64
+          path: dist/native/win32-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows-sandbox-arm64
+          path: dist/native/win32-arm64
+      - run: npm run verify:package
+
+      # The published tarball is proven from the archive listing, not from the
+      # working tree, and packed without re-running prepack so the downloaded
+      # Windows helpers survive into the artifact that ships.
+      - name: Verify the assembled tarball
+        run: npm pack --dry-run --ignore-scripts --json | node scripts/verify-tarball.mjs
+      - name: Generate release SBOM
+        run: npm sbom --sbom-format cyclonedx > agentkeeper.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentkeeper-sbom
+          path: agentkeeper.cdx.json
+          if-no-files-found: error
+      # OIDC trusted publishing supplies the short-lived credential. The
+      # prepack gate rechecks native artifacts after its production build.
+      - run: npm publish --provenance --access public

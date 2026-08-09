@@ -13,7 +13,7 @@ import type { Access } from '../paths/SensitivePath.js';
  * tier 1. `manual` was typed into `allowlist.json` in a text editor, outside
  * the agent's world — the one path spec §4.5 leaves open for tier 2. The
  * distinction is enforced structurally, not by trust: the sandbox never makes
- * `~/.agent-guard` writable, so the agent cannot forge a `manual` entry.
+ * `~/.agentkeeper` writable, so the agent cannot forge a `manual` entry.
  */
 export type GrantOrigin = 'runtime' | 'manual';
 

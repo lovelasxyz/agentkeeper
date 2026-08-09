@@ -1,0 +1,432 @@
+import { describe, expect, it } from 'vitest';
+import { AbsolutePath } from '../../src/domain/value-objects/AbsolutePath.js';
+import type {
+  GitConfigurationController,
+  ServiceController,
+  ServiceRegistration,
+  ServiceStatus,
+} from '../../src/application/ports/SystemIntegration.js';
+import { TransactionalInstallationExecutor } from '../../src/application/use-cases/ExecuteInstallationPlan.js';
+import {
+  ProtectionInstallationConflictError,
+  SystemIntegrationConcurrentChangeError,
+  TransactionalProtectionInstallationExecutor,
+} from '../../src/application/use-cases/ExecuteProtectionInstallation.js';
+import type {
+  InstallationExecutor,
+  InstallationPlan,
+} from '../../src/application/ports/InstallationLifecycle.js';
+import type { ManagedInstallationOptions } from '../../src/infrastructure/install/ManagedInstallation.js';
+import { ProtectionInstallationPlanner } from '../../src/infrastructure/install/ProtectionInstallation.js';
+import type { Platform } from '../../src/domain/value-objects/Platform.js';
+import { InMemoryFileSystem } from './fakes.js';
+
+const HOME = AbsolutePath.of('/Users/dev');
+const STATE = HOME.join('.agentkeeper');
+const PROFILE = HOME.join('.zshrc');
+const SETTINGS = HOME.join('.claude/settings.json');
+const RUNTIME = AbsolutePath.of('/opt/node runtime/100%/node');
+const ENTRYPOINT = AbsolutePath.of('/opt/agentkeeper app/dist/cli.js');
+const MANAGED_HOOKS = STATE.join('git-hooks');
+
+function baseOptions(): ManagedInstallationOptions {
+  return {
+    home: HOME,
+    stateDir: STATE,
+    shell: 'posix',
+    runtimeExecutable: RUNTIME,
+    agentkeeperEntrypoint: ENTRYPOINT,
+    agentExecutables: { claude: AbsolutePath.of('/opt/agents/claude') },
+    profiles: [PROFILE],
+    claudeSettings: SETTINGS,
+  };
+}
+
+class FakeServiceController implements ServiceController {
+  status: ServiceStatus = { registered: false, active: false, healthy: false };
+  readonly calls: string[] = [];
+  failNextDesired: 'active' | 'absent' | null = null;
+
+  async inspect(registration: ServiceRegistration): Promise<ServiceStatus> {
+    this.calls.push(`inspect:${registration.platform}:${registration.id}`);
+    return { ...this.status };
+  }
+
+  async setDesired(
+    registration: ServiceRegistration,
+    desired: 'active' | 'absent',
+  ): Promise<void> {
+    this.calls.push(`set:${registration.id}:${desired}`);
+    if (this.failNextDesired === desired) {
+      this.failNextDesired = null;
+      throw new Error('simulated service activation failure');
+    }
+    this.status =
+      desired === 'active'
+        ? { registered: true, active: true, healthy: true }
+        : { registered: false, active: false, healthy: false };
+  }
+
+  async restore(registration: ServiceRegistration, status: ServiceStatus): Promise<void> {
+    this.calls.push(`restore:${registration.id}`);
+    this.status = { ...status };
+  }
+}
+
+class FakeGitConfiguration implements GitConfigurationController {
+  readonly writes: Array<string | null> = [];
+  failNextWrite = false;
+  failForPath: string | null | undefined = undefined;
+  readCalls = 0;
+  mutateOnRead: { readonly call: number; readonly value: string | null } | null = null;
+
+  constructor(public hooksPath: string | null) {}
+
+  async readGlobalHooksPath(): Promise<string | null> {
+    this.readCalls += 1;
+    if (this.mutateOnRead?.call === this.readCalls) this.hooksPath = this.mutateOnRead.value;
+    return this.hooksPath;
+  }
+
+  async writeGlobalHooksPath(path: string | null): Promise<void> {
+    if (this.failNextWrite) {
+      this.failNextWrite = false;
+      throw new Error('simulated git config failure');
+    }
+    if (this.failForPath !== undefined && path === this.failForPath) {
+      throw new Error('simulated git rollback failure');
+    }
+    this.writes.push(path);
+    this.hooksPath = path;
+  }
+}
+
+async function fixture(
+  platform: Platform = 'darwin',
+  originalHooksPath: string | null = '/work/.husky',
+): Promise<{
+  files: InMemoryFileSystem;
+  service: FakeServiceController;
+  git: FakeGitConfiguration;
+  planner: ProtectionInstallationPlanner;
+  executor: TransactionalProtectionInstallationExecutor;
+}> {
+  const files = new InMemoryFileSystem();
+  await files.write(PROFILE, '# personal\n');
+  await files.write(SETTINGS, '{"hooks":{"Stop":[1]}}');
+  const service = new FakeServiceController();
+  const git = new FakeGitConfiguration(originalHooksPath);
+  const planner = new ProtectionInstallationPlanner(
+    files,
+    baseOptions(),
+    platform,
+    service,
+    git,
+  );
+  const executor = new TransactionalProtectionInstallationExecutor(
+    new TransactionalInstallationExecutor(files),
+    service,
+    git,
+  );
+  return { files, service, git, planner, executor };
+}
+
+describe('ProtectionInstallationPlanner', () => {
+  it('installs a launchd login resident and chain-safe global git hooks once', async () => {
+    const { files, service, git, planner, executor } = await fixture();
+    const plan = await planner.plan('activate');
+
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.externalChanges.map((change) => change.kind)).toEqual([
+      'git-hooks-path',
+      'service',
+    ]);
+    const paths = plan.filePlan.changes.map((change) => change.path.value);
+    expect(paths).toContain(
+      '/Users/dev/Library/LaunchAgents/dev.agentkeeper.watcher.plist',
+    );
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        `${MANAGED_HOOKS.value}/pre-commit`,
+        `${MANAGED_HOOKS.value}/post-checkout`,
+        `${MANAGED_HOOKS.value}/post-merge`,
+      ]),
+    );
+    const preCommit = plan.filePlan.changes.find(
+      (change) => change.path.value === `${MANAGED_HOOKS.value}/pre-commit`,
+    )?.after;
+    expect(preCommit).toContain("_agentkeeper_previous_hooks='/work/.husky'");
+    expect(preCommit).toContain('"$_agentkeeper_existing_hook" "$@"');
+    expect(preCommit).toContain(
+      "'/opt/node runtime/100%/node' '/opt/agentkeeper app/dist/cli.js' scan --quiet --source 'git-pre-commit'",
+    );
+    expect(preCommit).not.toContain('scan --quiet --source \'git-pre-commit\' || true');
+
+    await executor.execute(plan);
+    expect(git.hooksPath).toBe(MANAGED_HOOKS.value);
+    expect(service.status).toEqual({ registered: true, active: true, healthy: true });
+    const launchd = await files.read(
+      HOME.join('Library/LaunchAgents/dev.agentkeeper.watcher.plist'),
+    );
+    expect(launchd).toContain('<key>RunAtLoad</key><true/>');
+    expect(launchd).toContain(
+      '<array><string>/opt/node runtime/100%/node</string><string>/opt/agentkeeper app/dist/cli.js</string><string>daemon</string></array>',
+    );
+
+    const second = await planner.plan('activate');
+    expect(second.filePlan.changes).toEqual([]);
+    expect(second.externalChanges).toEqual([]);
+    expect(second.healthy).toBe(true);
+    expect((await planner.health()).healthy).toBe(true);
+  });
+
+  it('deactivates the resident, restores core.hooksPath, and restores user files exactly', async () => {
+    const { files, service, git, planner, executor } = await fixture();
+    const profileBefore = await files.read(PROFILE);
+    const settingsBefore = await files.read(SETTINGS);
+    await executor.execute(await planner.plan('activate'));
+
+    const deactivate = await planner.plan('deactivate');
+    expect(deactivate.conflicts).toEqual([]);
+    expect(deactivate.externalChanges.map((change) => change.kind)).toEqual([
+      'service',
+      'git-hooks-path',
+    ]);
+    await executor.execute(deactivate);
+
+    expect(service.status.registered).toBe(false);
+    expect(git.hooksPath).toBe('/work/.husky');
+    expect(await files.read(MANAGED_HOOKS.join('pre-commit'))).toBeNull();
+    expect(await files.read(PROFILE)).toBe(profileBefore);
+    expect(await files.read(SETTINGS)).toBe(settingsBefore);
+    expect((await planner.plan('deactivate')).externalChanges).toEqual([]);
+  });
+
+  it('repairs a managed hook and restarts an unhealthy resident without touching foreign hooks', async () => {
+    const { files, service, git, planner, executor } = await fixture();
+    await executor.execute(await planner.plan('activate'));
+    const hook = MANAGED_HOOKS.join('post-merge');
+    await files.write(hook, '# damaged\n');
+    service.status = { registered: true, active: false, healthy: false };
+    git.hooksPath = '/work/.husky';
+
+    const repair = await planner.plan('repair');
+    expect(repair.conflicts).toEqual([]);
+    expect(repair.filePlan.changes.map((change) => change.path.value)).toEqual([hook.value]);
+    expect(repair.externalChanges.map((change) => change.kind)).toEqual([
+      'git-hooks-path',
+      'service',
+    ]);
+    await executor.execute(repair);
+
+    expect(await files.read(hook)).toContain("scan --quiet --source 'git-post-merge' || true");
+    expect(service.status.healthy).toBe(true);
+    expect(git.hooksPath).toBe(MANAGED_HOOKS.value);
+    expect((await planner.health()).healthy).toBe(true);
+  });
+
+  it('repairs one damaged Git state copy from its checksum-managed replica', async () => {
+    const { files, planner, executor } = await fixture();
+    await executor.execute(await planner.plan('activate'));
+    const primary = STATE.join('installation/git-state.json');
+    const replica = STATE.join('installation/git-state.replica.json');
+    const expected = await files.read(replica);
+    await files.write(primary, '{ damaged');
+
+    const repair = await planner.plan('repair');
+
+    expect(repair.conflicts).toEqual([]);
+    expect(repair.filePlan.changes.map((change) => change.path.value)).toEqual([primary.value]);
+    await executor.execute(repair);
+    expect(await files.read(primary)).toBe(expected);
+    expect((await planner.health()).healthy).toBe(true);
+  });
+
+  it('refuses to overwrite a hooksPath changed by somebody else after activation', async () => {
+    const { git, planner, executor } = await fixture();
+    await executor.execute(await planner.plan('activate'));
+    git.hooksPath = '/tmp/foreign-hooks';
+
+    const repair = await planner.plan('repair');
+
+    expect(repair.conflicts[0]?.code).toBe('external-state-drift');
+    expect(repair.filePlan.changes).toEqual([]);
+    await expect(executor.execute(repair)).rejects.toBeInstanceOf(
+      ProtectionInstallationConflictError,
+    );
+    expect(git.hooksPath).toBe('/tmp/foreign-hooks');
+  });
+
+  it('rolls back files and git config if first service activation fails', async () => {
+    const { files, service, git, planner, executor } = await fixture();
+    const profileBefore = await files.read(PROFILE);
+    const settingsBefore = await files.read(SETTINGS);
+    service.failNextDesired = 'active';
+
+    await expect(executor.execute(await planner.plan('activate'))).rejects.toThrow(
+      'simulated service activation failure',
+    );
+
+    expect(git.hooksPath).toBe('/work/.husky');
+    expect(service.status.registered).toBe(false);
+    expect(await files.read(STATE.join('installation/manifest.json'))).toBeNull();
+    expect(await files.read(MANAGED_HOOKS.join('post-checkout'))).toBeNull();
+    expect(await files.read(PROFILE)).toBe(profileBefore);
+    expect(await files.read(SETTINGS)).toBe(settingsBefore);
+  });
+
+  it('refuses when external state changes between planning and execution', async () => {
+    const { files, git, planner, executor } = await fixture();
+    const plan = await planner.plan('activate');
+    git.hooksPath = '/changed-after-plan';
+
+    await expect(executor.execute(plan)).rejects.toBeInstanceOf(
+      SystemIntegrationConcurrentChangeError,
+    );
+    expect(await files.read(STATE.join('installation/manifest.json'))).toBeNull();
+    expect(git.hooksPath).toBe('/changed-after-plan');
+  });
+
+  it('rechecks external state immediately before each mutation and rolls installed files back', async () => {
+    const { files, service, git, planner, executor } = await fixture();
+    const plan = await planner.plan('activate');
+    git.readCalls = 0;
+    git.mutateOnRead = { call: 2, value: '/changed-during-file-activation' };
+
+    await expect(executor.execute(plan)).rejects.toBeInstanceOf(
+      SystemIntegrationConcurrentChangeError,
+    );
+    expect(git.hooksPath).toBe('/changed-during-file-activation');
+    expect(service.status.registered).toBe(false);
+    expect(await files.read(STATE.join('installation/manifest.json'))).toBeNull();
+  });
+
+  it('restores service and Git activation if filesystem deactivation fails', async () => {
+    const { files, service, git, planner, executor } = await fixture();
+    await executor.execute(await planner.plan('activate'));
+    const plan = await planner.plan('deactivate');
+    const failingFiles: InstallationExecutor = {
+      async execute(_plan: InstallationPlan) {
+        throw new Error('simulated filesystem deactivation failure');
+      },
+    };
+    const failingExecutor = new TransactionalProtectionInstallationExecutor(
+      failingFiles,
+      service,
+      git,
+    );
+
+    await expect(failingExecutor.execute(plan)).rejects.toThrow(
+      'simulated filesystem deactivation failure',
+    );
+    expect(service.status).toEqual({ registered: true, active: true, healthy: true });
+    expect(git.hooksPath).toBe(MANAGED_HOOKS.value);
+    expect(await files.read(STATE.join('installation/manifest.json'))).not.toBeNull();
+  });
+
+  it('reports an incomplete rollback while still restoring managed files', async () => {
+    const { files, service, git, planner, executor } = await fixture();
+    const plan = await planner.plan('activate');
+    service.failNextDesired = 'active';
+    git.failForPath = '/work/.husky';
+
+    await expect(executor.execute(plan)).rejects.toThrow(
+      'could not be rolled back completely',
+    );
+    expect(await files.read(STATE.join('installation/manifest.json'))).toBeNull();
+  });
+
+  it('reports a filesystem rollback failure together with the triggering service failure', async () => {
+    const { service, git, planner } = await fixture();
+    const plan = await planner.plan('activate');
+    let fileExecutions = 0;
+    const rollbackFailingFiles: InstallationExecutor = {
+      async execute(filePlan: InstallationPlan) {
+        fileExecutions += 1;
+        if (fileExecutions === 2) throw new Error('simulated filesystem rollback failure');
+        return { applied: filePlan.changes.length, dryRun: false };
+      },
+    };
+    service.failNextDesired = 'active';
+    const executor = new TransactionalProtectionInstallationExecutor(
+      rollbackFailingFiles,
+      service,
+      git,
+    );
+
+    await expect(executor.execute(plan)).rejects.toMatchObject({
+      name: 'AggregateError',
+      message: 'Protection installation failed and could not be rolled back completely',
+      errors: [
+        expect.objectContaining({ message: 'simulated service activation failure' }),
+        expect.objectContaining({ message: 'simulated filesystem rollback failure' }),
+      ],
+    });
+    expect(fileExecutions).toBe(2);
+    expect(git.hooksPath).toBe('/work/.husky');
+  });
+
+  it('refuses a pre-existing service registration when no manifest proves ownership', async () => {
+    const { service, planner } = await fixture();
+    service.status = { registered: true, active: false, healthy: false };
+
+    const plan = await planner.plan('activate');
+
+    expect(plan.conflicts[0]?.code).toBe('service-id-collision');
+    expect(plan.filePlan.changes).toEqual([]);
+  });
+
+  it.each([
+    '~/.agentkeeper/git-hooks',
+    '/Users/dev/.agentkeeper/git-hooks/',
+  ])('refuses a semantically recursive existing hooksPath: %s', async (existingPath) => {
+    const { planner } = await fixture('darwin', existingPath);
+
+    const plan = await planner.plan('activate');
+
+    expect(plan.conflicts[0]?.code).toBe('external-state-drift');
+    expect(plan.filePlan.changes).toEqual([]);
+  });
+
+  it.each([
+    [
+      'linux' as const,
+      '/Users/dev/.config/systemd/user/agentkeeper.service',
+      [
+        'WantedBy=default.target',
+        'ExecStart="/opt/node runtime/100%%/node" "/opt/agentkeeper app/dist/cli.js" daemon',
+        'Restart=on-failure',
+      ],
+    ],
+    [
+      'win32' as const,
+      '/Users/dev/.agentkeeper/services/agentkeeper-watcher.xml',
+      [
+        '<LogonTrigger>',
+        '<RunLevel>LeastPrivilege</RunLevel>',
+        '<Command>/opt/node runtime/100%/node</Command>',
+        '<Arguments>&quot;/opt/agentkeeper app/dist/cli.js&quot; daemon</Arguments>',
+      ],
+    ],
+  ])('generates a reboot/login-persistent %s descriptor', async (platform, path, fragments) => {
+    const { planner } = await fixture(platform);
+
+    const plan = await planner.plan('activate');
+    const descriptor = plan.filePlan.changes.find((change) => change.path.value === path)?.after;
+
+    expect(plan.conflicts).toEqual([]);
+    for (const fragment of fragments) expect(descriptor).toContain(fragment);
+  });
+
+  it('chains repository-local default hooks when core.hooksPath was not configured', async () => {
+    const { planner } = await fixture('linux', null);
+
+    const plan = await planner.plan('activate');
+    const hook = plan.filePlan.changes.find(
+      (change) => change.path.value === `${MANAGED_HOOKS.value}/post-checkout`,
+    )?.after;
+
+    expect(hook).toContain('git rev-parse --git-dir');
+    expect(hook).toContain('/hooks/post-checkout');
+  });
+});

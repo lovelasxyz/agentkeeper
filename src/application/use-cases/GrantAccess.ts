@@ -56,7 +56,7 @@ export class GrantAccess {
         message:
           `Access to ${resource.toResourceString(context.home)} is not configurable while the ` +
           `agent is running.${reason === null ? '' : ` ${reason.rationale}`} ` +
-          'It can only be changed by editing ~/.agent-guard/allowlist.json yourself.',
+          'It can only be changed by editing ~/.agentkeeper/allowlist.json yourself.',
       };
     }
 

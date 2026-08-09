@@ -62,7 +62,7 @@ export class ZshEnvRule extends PersistenceRule {
   readonly title = '~/.zshenv changed';
   readonly remediation =
     '~/.zshenv is read by every zsh process, including non-interactive ones. Review the diff; ' +
-    'the previous version is in ~/.agent-guard/backups/.';
+    'the previous version is in ~/.agentkeeper/backups/.';
 
   protected readonly patterns = ['~/.zshenv'];
 }
@@ -189,7 +189,7 @@ export class AgentConfigDriftRule extends PersistenceRule {
   readonly id = RuleId.of('AG-P008');
   readonly severity = Severity.HIGH;
   readonly defaultDisposition = Disposition.ASK;
-  readonly title = 'Agent configuration changed outside agent-guard';
+  readonly title = 'Agent configuration changed outside agentkeeper';
   readonly remediation =
     'Hooks and MCP servers in global agent settings apply to every project you open. Confirm you ' +
     'made this change.';
@@ -202,6 +202,24 @@ export class AgentConfigDriftRule extends PersistenceRule {
   ];
 }
 
+export class AgentkeeperControlPlaneDriftRule extends PersistenceRule {
+  readonly id = RuleId.of('AG-P009');
+  readonly severity = Severity.CRITICAL;
+  readonly defaultDisposition = Disposition.ASK;
+  readonly title = 'Agentkeeper protected configuration changed';
+  readonly remediation =
+    'Run `agentkeeper repair` and review the pending persistence incident. Do not approve it ' +
+    'unless the checksum change matches an installation or configuration action you initiated.';
+
+  protected readonly patterns = [
+    '~/.agentkeeper/config.json',
+    '~/.agentkeeper/allowlist.json',
+    '~/.agentkeeper/installation/**',
+    '~/.agentkeeper/shell/**',
+    '~/.agentkeeper/shims/**',
+  ];
+}
+
 export const PERSISTENCE_RULES: readonly PersistenceRule[] = Object.freeze([
   new ZshEnvRule(),
   new ShellStartupRule(),
@@ -211,4 +229,5 @@ export const PERSISTENCE_RULES: readonly PersistenceRule[] = Object.freeze([
   new SshPersistenceRule(),
   new NpmrcRule(),
   new AgentConfigDriftRule(),
+  new AgentkeeperControlPlaneDriftRule(),
 ]);

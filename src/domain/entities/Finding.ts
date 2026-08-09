@@ -68,6 +68,7 @@ export class Finding {
       disposition: this.disposition.name,
       title: this.title,
       subject: this.subject,
+      decisionKey: this.decisionKey,
       contentHash: this.contentHash?.toString() ?? null,
       location: this.location?.toString() ?? null,
     };

@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { AbsolutePath } from '../domain/value-objects/AbsolutePath.js';
 import { isPlatform, type Platform } from '../domain/value-objects/Platform.js';
 import type { Finding } from '../domain/entities/Finding.js';
@@ -28,13 +28,19 @@ export class SystemClock implements Clock {
  */
 export class ProcessEnvironment implements Environment {
   readonly home: AbsolutePath;
+  readonly identityHome: AbsolutePath;
   readonly cwd: AbsolutePath;
   readonly platform: Platform;
   readonly tempDir: AbsolutePath;
   readonly variables: Readonly<Record<string, string>>;
 
-  constructor(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()) {
+  constructor(
+    env: NodeJS.ProcessEnv = process.env,
+    cwd: string = process.cwd(),
+    identityHome: string = userInfo().homedir,
+  ) {
     this.home = AbsolutePath.of(env['HOME'] ?? homedir());
+    this.identityHome = AbsolutePath.of(identityHome);
     this.cwd = AbsolutePath.of(cwd);
     this.platform = isPlatform(process.platform) ? process.platform : 'linux';
     this.tempDir = AbsolutePath.of(env['TMPDIR'] ?? tmpdir());
@@ -67,7 +73,7 @@ export class ProcessEnvironment implements Environment {
       '.npm',
       'Library/pnpm',
     ];
-    const roots = candidates.map((relative) => this.home.join(relative));
+    const roots = candidates.map((relative) => this.identityHome.join(relative));
     // The running interpreter itself, wherever it came from.
     roots.push(AbsolutePath.of(process.execPath).parent.parent);
     return roots;
@@ -82,11 +88,11 @@ export class ConsoleLogger implements Logger {
   }
 
   warn(message: string): void {
-    this.stream.write(`agent-guard: ${message}\n`);
+    this.stream.write(`agentkeeper: ${message}\n`);
   }
 
   error(message: string): void {
-    this.stream.write(`agent-guard: ${message}\n`);
+    this.stream.write(`agentkeeper: ${message}\n`);
   }
 }
 
@@ -170,13 +176,15 @@ export class SilentPrompter implements Prompter {
  * not take down the process that was trying to warn the user.
  */
 export class DesktopNotifier implements Notifier {
+  private static readonly TIMEOUT_MS = 5_000;
+
   constructor(
     private readonly platform: Platform,
     private readonly fallback: Logger,
   ) {}
 
   async notify(finding: Finding): Promise<void> {
-    const title = `agent-guard: ${finding.title}`;
+    const title = `agentkeeper: ${finding.title}`;
     const body = finding.detail;
     this.fallback.warn(`${finding.ruleId.toString()} ${finding.subject} — ${body}`);
 
@@ -199,8 +207,20 @@ export class DesktopNotifier implements Notifier {
   private run(executable: string, args: readonly string[]): Promise<void> {
     return new Promise((resolve, reject) => {
       const child = spawn(executable, [...args], { stdio: 'ignore' });
-      child.once('error', reject);
-      child.once('exit', () => resolve());
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      const timer = setTimeout(() => {
+        child.kill();
+        finish(new Error(`notification helper exceeded ${DesktopNotifier.TIMEOUT_MS}ms`));
+      }, DesktopNotifier.TIMEOUT_MS);
+      child.once('error', (error) => finish(error));
+      child.once('exit', () => finish());
     });
   }
 }

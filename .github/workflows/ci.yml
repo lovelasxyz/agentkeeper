@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +24,10 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      - name: Configure the MSVC toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       # Layer 1 on Linux needs bubblewrap. Without it the sandbox suite would
       # skip silently, which is exactly the kind of quiet gap this project is
@@ -41,7 +45,16 @@ jobs:
       - name: Unit and integration tests with coverage thresholds
         run: npm run coverage
 
+      - run: npm run clean
       - run: npm run build
+
+      - name: Preserve the Windows AppContainer helper for package assembly
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-sandbox-x64
+          path: dist/native/win32-x64/agentkeeper-sandbox.exe
+          if-no-files-found: error
 
       # The tests that decide whether the product works: a real process under
       # the real mechanism, checking that forbidden things actually fail.
@@ -49,14 +62,34 @@ jobs:
         run: npm run test:sandbox
 
       - name: End-to-end install lifecycle
+        if: runner.os != 'Windows'
         run: npm run test:e2e
 
       # Dogfooding: the tool scans its own repository.
       - name: Self-scan
-        run: node dist/presentation/cli/main.js scan .
+        run: node dist/cli.js scan .
+
+  windows-native-arm64:
+    name: Windows native helper (ARM64 compile)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+      - run: node scripts/build-windows-sandbox.mjs arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-sandbox-arm64
+          path: dist/native/win32-arm64/agentkeeper-sandbox.exe
+          if-no-files-found: error
 
   package:
     name: package contents
+    needs: [verify, windows-native-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +98,31 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npm pack --dry-run
+      - run: npm run clean
+      - run: npm run build
+
+      - name: Add the prebuilt Windows AppContainer helper
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-sandbox-x64
+          path: dist/native/win32-x64
+
+      - name: Add the prebuilt Windows ARM64 AppContainer helper
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-sandbox-arm64
+          path: dist/native/win32-arm64
+
+      - run: test -f dist/native/win32-x64/agentkeeper-sandbox.exe
+      - run: test -f dist/native/win32-arm64/agentkeeper-sandbox.exe
+      - run: npm run verify:package
+
+      # --ignore-scripts on purpose: prepack would rebuild dist after the
+      # cross-compiled helpers landed, so the tarball would be decided by a
+      # different tree than the one just verified. The verifier then reads the
+      # archive listing itself rather than trusting the working tree.
+      - name: Verify the assembled tarball
+        run: npm pack --dry-run --ignore-scripts --json | node scripts/verify-tarball.mjs
 
       - name: Refuse a postinstall script
         run: |
@@ -77,7 +134,7 @@ jobs:
       - name: Refuse runtime dependencies
         run: |
           count=$(node -e "console.log(Object.keys(require('./package.json').dependencies || {}).length)")
-          if [ "$count" -gt 8 ]; then
-            echo "more than 8 direct runtime dependencies" >&2
+          if [ "$count" -ne 0 ]; then
+            echo "runtime dependencies are forbidden" >&2
             exit 1
           fi

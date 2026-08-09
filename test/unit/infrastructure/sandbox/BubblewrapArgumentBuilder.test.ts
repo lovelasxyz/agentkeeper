@@ -71,9 +71,14 @@ describe('BubblewrapArgumentBuilder', () => {
     expect(builder.build(policy(), CTX, COMMAND)).toContain('--unshare-net');
   });
 
-  it('keeps the network when the policy allows any', () => {
-    const args = builder.build(policy({ network: [NetworkRule.tcp(443)] }), CTX, COMMAND);
-    expect(args).not.toContain('--unshare-net');
+  it.each([
+    ['TCP destination', NetworkRule.tcp(443)],
+    ['UDP destination', NetworkRule.udp(53)],
+    ['loopback destination', NetworkRule.loopback()],
+    ['wildcard port', NetworkRule.tcp('*')],
+  ])('keeps an isolated network namespace when policy requests %s', (_label, rule) => {
+    const args = builder.build(policy({ network: [rule] }), CTX, COMMAND);
+    expect(args.filter((arg) => arg === '--unshare-net')).toHaveLength(1);
   });
 
   it('shadows an anchored refusal with an empty tmpfs', () => {
@@ -125,9 +130,76 @@ describe('BubblewrapRunner honesty about its limits', () => {
     expect(gaps.join(' ')).toMatch(/no fixed anchor/);
   });
 
-  it('reports that per-port network rules degrade to all-or-nothing', () => {
+  it('uses the empty-home topology for outside-workspace globs without broad grants', () => {
+    const gaps = runner.unenforceable(
+      policy({
+        denies: [
+          new DenyRule(
+            'foreign-env',
+            PathPattern.of('**/.env'),
+            'read',
+            'secrets',
+            WORKSPACE,
+          ),
+        ],
+      }),
+      CTX,
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it('refuses a broad runtime grant that makes an outside-workspace glob unenforceable', () => {
+    const shared = ResourceRef.subtree(HOME.join('shared'));
+    const gaps = runner.unenforceable(
+      policy({
+        reads: [ResourceRef.subtree(WORKSPACE), shared],
+        runtimeRefs: [shared],
+        denies: [
+          new DenyRule(
+            'foreign-env',
+            PathPattern.of('**/.env'),
+            'read',
+            'secrets',
+            WORKSPACE,
+          ),
+        ],
+      }),
+      CTX,
+    );
+    expect(gaps.join(' ')).toMatch(/no fixed anchor/);
+  });
+
+  it('reports that network rules need a broker instead of claiming host-network access', () => {
     const gaps = runner.unenforceable(policy({ network: [NetworkRule.tcp(443)] }), CTX);
-    expect(gaps.join(' ')).toMatch(/on or off/);
+    expect(gaps.join(' ')).toMatch(/broker/i);
+    expect(gaps.join(' ')).toMatch(/isolated|blocked/i);
+    expect(gaps.join(' ')).not.toMatch(/unrestricted outbound access/i);
+  });
+
+  it('runs the private relay as PID 1 when a Unix-socket broker is verified', () => {
+    const brokered = policy({
+      network: [NetworkRule.destination('registry.npmjs.org', 443)],
+      networkEnforcement: {
+        kind: 'brokered',
+        transport: {
+          kind: 'unix-socket-relay',
+          socketPath: AbsolutePath.of('/tmp/agentkeeper/broker.sock'),
+          relayScript: AbsolutePath.of('/tmp/agentkeeper/network-relay.mjs'),
+          port: 43117,
+        },
+      },
+    });
+    expect(runner.unenforceable(brokered, CTX)).toEqual([]);
+    const args = runner.buildArgs(brokered, CTX, COMMAND);
+    expect(args.slice(args.indexOf('--'))).toEqual([
+      '--',
+      process.execPath,
+      '/tmp/agentkeeper/network-relay.mjs',
+      '/tmp/agentkeeper/broker.sock',
+      '43117',
+      '/usr/bin/claude',
+      '--help',
+    ]);
   });
 
   it('reports nothing when the policy fits the mechanism', () => {

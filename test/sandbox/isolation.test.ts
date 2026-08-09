@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,8 +13,13 @@ import { GrantScope } from '../../src/domain/value-objects/GrantScope.js';
 import { WorkspaceId } from '../../src/domain/value-objects/WorkspaceId.js';
 import { AbsolutePath } from '../../src/domain/value-objects/AbsolutePath.js';
 import { ResourceRef } from '../../src/domain/value-objects/ResourceRef.js';
+import { EnvironmentPolicy } from '../../src/domain/policy/EnvironmentPolicy.js';
+import { EnvironmentSanitizer } from '../../src/domain/policy/EnvironmentSanitizer.js';
+import { NetworkRule } from '../../src/domain/value-objects/NetworkRule.js';
+import { NodeDestinationBroker } from '../../src/infrastructure/network/NodeDestinationBroker.js';
 import type { PathContext } from '../../src/domain/paths/PathContext.js';
 import type { SandboxPolicy } from '../../src/domain/policy/SandboxPolicy.js';
+import type { DestinationBrokerSession } from '../../src/application/ports/NetworkBroker.js';
 
 /**
  * Spec §9.3 — the tests that decide whether this product exists.
@@ -35,6 +40,7 @@ let root: string;
 let workspace: AbsolutePath;
 let home: AbsolutePath;
 let context: PathContext;
+let brokerSession: DestinationBrokerSession;
 
 /** A fake home, so the suite never depends on — or touches — the real one. */
 function seedHome(): void {
@@ -50,7 +56,11 @@ function seedHome(): void {
   inside('.gitconfig', '[user]\n\tname = Dev');
   inside('.config/gh/hosts.yml', 'github.com:\n  oauth_token: ghp_x');
   inside('Library/LaunchAgents/.keep', '');
-  inside('.agent-guard/allowlist.json', '{"version":1,"grants":[]}');
+  inside('.agentkeeper/allowlist.json', '{"version":1,"grants":[]}');
+  inside('.agentkeeper/config.json', '{"version":1}');
+  inside('.agentkeeper/decisions.json', '{"version":1,"decisions":{}}');
+  inside('.agentkeeper/audit.log', '{"event":"canary"}\n');
+  inside('.agentkeeper/backups/zshrc.original', 'PRIVATE BACKUP');
   mkdirSync(join(home.value, 'projects/other'), { recursive: true });
   writeFileSync(join(home.value, 'projects/other/.env'), 'SECRET=1');
   writeFileSync(join(home.value, 'projects/other/notes.md'), 'private notes');
@@ -65,7 +75,7 @@ function buildPolicy(grants: readonly Grant[] = []): SandboxPolicy {
     description: 'Suite profile',
     reads: ['file:~/.gitconfig'],
     writes: [],
-    network: ['tcp:443', 'udp:53'],
+    network: ['example.com:443'],
   });
   const result = builder.build({
     profile,
@@ -73,17 +83,23 @@ function buildPolicy(grants: readonly Grant[] = []): SandboxPolicy {
     context,
     workspaceId: WorkspaceId.fromPath(workspace),
     toolchainRoots: [AbsolutePath.of(process.execPath).parent.parent],
-    stateDir: home.join('.agent-guard'),
+    stateDir: home.join('.agentkeeper'),
     agentStateDirs: [home.join('.claude')],
     // A scratch directory outside the fake home, so "temp is writable" cannot
     // accidentally re-open the very home this suite is checking.
     tempDirs: [AbsolutePath.of(join(root, 'tmp'))],
   });
-  return result.policy;
+  return result.policy.withNetworkEnforcement(brokerSession.enforcement);
 }
 
 /** Runs a snippet of Node inside the sandbox and returns what it printed. */
-function inSandbox(script: string, grants: readonly Grant[] = []): string {
+function inSandbox(
+  script: string,
+  grants: readonly Grant[] = [],
+  sourceEnvironment: Readonly<Record<string, string>> = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  ),
+): string {
   const policy = buildPolicy(grants);
   const profilePath = join(root, `policy-${Math.random().toString(36).slice(2)}.sb`);
   writeFileSync(profilePath, runner.compile(policy, context));
@@ -94,13 +110,39 @@ function inSandbox(script: string, grants: readonly Grant[] = []): string {
       {
         cwd: workspace.value,
         encoding: 'utf8',
-        env: { ...process.env, HOME: home.value, TMPDIR: join(root, 'tmp') },
+        env: { ...sourceEnvironment, HOME: home.value, TMPDIR: join(root, 'tmp') },
       },
     ).trim();
   } catch (error) {
     const failure = error as { stdout?: string; stderr?: string; message?: string };
     return `SPAWN-FAILED ${failure.stdout ?? ''} ${failure.stderr ?? ''} ${failure.message ?? ''}`;
   }
+}
+
+/** Async variant used when the host-side broker must keep servicing its event loop. */
+function inSandboxAsync(script: string): Promise<string> {
+  const policy = buildPolicy();
+  const profilePath = join(root, `policy-${Math.random().toString(36).slice(2)}.sb`);
+  writeFileSync(profilePath, runner.compile(policy, context));
+  return new Promise((resolve) => {
+    const child = spawn(
+      '/usr/bin/sandbox-exec',
+      ['-f', profilePath, process.execPath, '-e', script],
+      {
+        cwd: workspace.value,
+        env: { ...process.env, HOME: home.value, TMPDIR: join(root, 'tmp') },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    child.once('error', (error) => resolve(`SPAWN-FAILED ${stdout} ${stderr} ${error.message}`));
+    child.once('exit', () => resolve(stdout.trim()));
+  });
 }
 
 const readProbe = (target: string): string =>
@@ -111,11 +153,11 @@ const writeProbe = (target: string): string =>
   `try{require("fs").appendFileSync(${JSON.stringify(target)},"x");console.log("ALLOWED")}` +
   `catch(e){console.log("DENIED:"+e.code)}`;
 
-beforeAll(() => {
+beforeAll(async () => {
   // realpath: macOS resolves /var to /private/var, and the kernel enforces the
   // sandbox against the resolved path. Building a policy from the unresolved
   // one produces rules that match nothing.
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'agent-guard-sandbox-')));
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'agentkeeper-sandbox-')));
   home = AbsolutePath.of(join(root, 'home'));
   workspace = home.join('projects/app');
   mkdirSync(workspace.value, { recursive: true });
@@ -124,9 +166,15 @@ beforeAll(() => {
   writeFileSync(join(workspace.value, '.env'), 'LOCAL=1');
   context = { home, workspace, platform: 'darwin' };
   seedHome();
+  brokerSession = await new NodeDestinationBroker().start({
+    destinations: [NetworkRule.destination('example.com', 443)],
+    platform: 'darwin',
+    scratch: AbsolutePath.of(join(root, 'tmp')),
+  });
 });
 
-afterAll(() => {
+afterAll(async () => {
+  if (brokerSession) await brokerSession.close();
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
@@ -141,18 +189,22 @@ describeOnDarwin('isolation actually isolates (macOS / Seatbelt)', () => {
       ['~/.aws/credentials', '.aws/credentials'],
       ['~/.zsh_history', '.zsh_history'],
       ['~/.config/gh/hosts.yml', '.config/gh/hosts.yml'],
+      ['its own allowlist', '.agentkeeper/allowlist.json'],
+      ['its audit trail', '.agentkeeper/audit.log'],
+      ['installer backups', '.agentkeeper/backups/zshrc.original'],
       ["a sibling project's .env", 'projects/other/.env'],
       ['a sibling project', 'projects/other/notes.md'],
     ])('refuses to read %s', (_label, relative) => {
       expect(inSandbox(readProbe(join(home.value, relative)))).toMatch(/^DENIED:/);
     });
+
   });
 
   describe('writes that must fail', () => {
     it.each([
       ['~/.zshenv', '.zshenv'],
       ['a new launch agent', 'Library/LaunchAgents/evil.plist'],
-      ['its own allowlist', '.agent-guard/allowlist.json'],
+      ['its own allowlist', '.agentkeeper/allowlist.json'],
       ['~/.gitconfig', '.gitconfig'],
     ])('refuses to write %s', (_label, relative) => {
       expect(inSandbox(writeProbe(join(home.value, relative)))).toMatch(/^DENIED:/);
@@ -176,6 +228,13 @@ describeOnDarwin('isolation actually isolates (macOS / Seatbelt)', () => {
       expect(inSandbox(readProbe(join(home.value, '.gitconfig')))).toBe('ALLOWED');
     });
 
+    it('reads only the public hook configuration and decisions', () => {
+      expect(inSandbox(readProbe(join(home.value, '.agentkeeper/config.json')))).toBe('ALLOWED');
+      expect(inSandbox(readProbe(join(home.value, '.agentkeeper/decisions.json')))).toBe(
+        'ALLOWED',
+      );
+    });
+
     it('runs git', () => {
       expect(
         inSandbox(
@@ -188,6 +247,24 @@ describeOnDarwin('isolation actually isolates (macOS / Seatbelt)', () => {
 
     it('runs node', () => {
       expect(inSandbox('console.log("NODE-OK")')).toBe('NODE-OK');
+    });
+
+    it('runs node after the ambient environment authority is removed', () => {
+      const source = Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      );
+      source['HOME'] = home.value;
+      source['TMPDIR'] = join(root, 'tmp');
+      const sanitized = new EnvironmentSanitizer().sanitize(
+        source,
+        EnvironmentPolicy.forExecutable(process.execPath),
+      );
+
+      expect(inSandbox('console.log("SANITIZED-NODE-OK")', [], sanitized.environment)).toBe(
+        'SANITIZED-NODE-OK',
+      );
     });
   });
 
@@ -239,22 +316,85 @@ describeOnDarwin('isolation actually isolates (macOS / Seatbelt)', () => {
   });
 
   describe('network', () => {
-    it('allows the ports the profile opened', () => {
-      const output = inSandbox(
+    const throughBroker = (authority: string): string =>
+      'const net=require("node:net");' +
+      `const proxy=new URL(${JSON.stringify(brokerSession?.proxyUrl ?? '')});` +
+      'const socket=net.connect(Number(proxy.port),proxy.hostname);let data="";' +
+      `socket.once("connect",()=>socket.write(${JSON.stringify(
+        `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`,
+      )}));` +
+      'socket.on("data",chunk=>{data+=chunk;const line=data.split("\\r\\n")[0];' +
+      'if(line){console.log(line.includes(" 200 ")?"ALLOWED":"DENIED:"+line);socket.destroy()}});' +
+      'socket.on("error",e=>console.log("DENIED:"+e.code));' +
+      'setTimeout(()=>{console.log("DENIED:TIMEOUT");process.exit(0)},15000).unref();';
+
+    it('allows a configured destination through the broker', async () => {
+      await expect(inSandboxAsync(throughBroker('example.com:443'))).resolves.toBe('ALLOWED');
+    });
+
+    it('refuses an arbitrary destination even on the same port', async () => {
+      await expect(inSandboxAsync(throughBroker('example.org:443'))).resolves.toMatch(
+        /^DENIED:HTTP\/1\.1 403/,
+      );
+    });
+
+    it('refuses direct egress that bypasses the broker', async () => {
+      const output = await inSandboxAsync(
         'fetch("https://example.com",{signal:AbortSignal.timeout(15000)})' +
           '.then(r=>console.log("ALLOWED"))' +
           '.catch(e=>console.log("DENIED:"+(e.cause?.code||e.name)))',
       );
-      expect(output).toBe('ALLOWED');
+      expect(output).toMatch(/^DENIED:/);
     });
 
-    it('refuses a port the profile did not open', () => {
-      const output = inSandbox(
+    it('refuses direct plaintext HTTP as well', async () => {
+      const output = await inSandboxAsync(
         'fetch("http://example.com",{signal:AbortSignal.timeout(15000)})' +
           '.then(r=>console.log("ALLOWED"))' +
           '.catch(e=>console.log("DENIED:"+(e.cause?.code||e.name)))',
       );
       expect(output).toMatch(/^DENIED:/);
+    });
+
+    it('does not turn DNS support into access to arbitrary local unix sockets', async () => {
+      const socketPath = join(root, 'tmp', 'credential-agent.sock');
+      const server = spawn(
+        process.execPath,
+        [
+          '-e',
+          'const net=require("node:net");' +
+            'const socket=process.argv[1];' +
+            'const server=net.createServer(()=>{});' +
+            'server.listen(socket,()=>process.stdout.write("READY\\n"));' +
+            'process.on("SIGTERM",()=>server.close(()=>process.exit(0)));',
+          socketPath,
+        ],
+        { stdio: ['ignore', 'pipe', 'inherit'] },
+      );
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('unix socket canary did not start')), 5_000);
+          server.once('error', reject);
+          server.stdout.once('data', (chunk: Buffer) => {
+            if (chunk.toString().includes('READY')) {
+              clearTimeout(timer);
+              resolve();
+            }
+          });
+        });
+
+        const output = inSandbox(
+          'const net=require("node:net");' +
+            `const client=net.createConnection(${JSON.stringify(socketPath)});` +
+            'client.on("connect",()=>{console.log("ALLOWED");client.end()});' +
+            'client.on("error",e=>console.log("DENIED:"+e.code));' +
+            'setTimeout(()=>{console.log("DENIED:TIMEOUT");process.exit(0)},2000).unref();',
+        );
+        expect(output).toMatch(/^DENIED:/);
+      } finally {
+        server.kill('SIGTERM');
+      }
     });
   });
 

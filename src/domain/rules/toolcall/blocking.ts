@@ -23,7 +23,7 @@ export class SensitivePathAccessRule extends ToolCallRule {
   readonly title = 'Tool call reaches for a protected path';
   readonly remediation =
     'Access to credentials, persistence and shell history is configured by editing ' +
-    '~/.agent-guard/allowlist.json in a text editor. There is no prompt for it, by design.';
+    '~/.agentkeeper/allowlist.json in a text editor. There is no prompt for it, by design.';
 
   constructor(private readonly tiers: AccessTierResolver) {
     super();
@@ -151,9 +151,9 @@ export class SelfProtectionRule extends ToolCallRule {
   readonly id = RuleId.of('AG-B005');
   readonly severity = Severity.CRITICAL;
   readonly defaultDisposition = Disposition.BLOCK;
-  readonly title = 'Tool call modifies agent-guard itself';
+  readonly title = 'Tool call modifies agentkeeper itself';
   readonly remediation =
-    'Grants are added by editing ~/.agent-guard/allowlist.json yourself. That gap between asking ' +
+    'Grants are added by editing ~/.agentkeeper/allowlist.json yourself. That gap between asking ' +
     'and receiving is the whole permission model; a tool call cannot close it.';
 
   appliesTo(call: ToolCall): boolean {
@@ -161,7 +161,7 @@ export class SelfProtectionRule extends ToolCallRule {
   }
 
   inspect(call: ToolCall): readonly Finding[] {
-    const stateDir = call.context.home.join('.agent-guard');
+    const stateDir = call.context.home.join('.agentkeeper');
     const paths = call.paths().filter((path) => stateDir.contains(path));
 
     const findings = paths.map((path) =>
@@ -174,11 +174,11 @@ export class SelfProtectionRule extends ToolCallRule {
     );
 
     const command = call.command();
-    if (command !== null && /agent-guard\s+(grants|uninstall|pause)/.test(command.raw)) {
+    if (command !== null && /agentkeeper\s+(grants|uninstall|pause)/.test(command.raw)) {
       findings.push(
         this.finding({
           title: this.title,
-          detail: `The command would reconfigure agent-guard: ${command.raw}`,
+          detail: `The command would reconfigure agentkeeper: ${command.raw}`,
           subject: command.raw,
           location: null,
         }),
@@ -195,7 +195,7 @@ export class BypassEnvironmentRule extends ToolCallRule {
   readonly defaultDisposition = Disposition.BLOCK;
   readonly title = 'Tool call tries to start a command with isolation disabled';
   readonly remediation =
-    'AGENT_GUARD_BYPASS exists so *you* can skip the wrapper from your own shell. Reaching it ' +
+    'AGENTKEEPER_BYPASS exists so *you* can skip the wrapper from your own shell. Reaching it ' +
     'from inside the agent would make the wrapper optional, which is the same as absent.';
 
   appliesTo(call: ToolCall): boolean {
@@ -207,14 +207,14 @@ export class BypassEnvironmentRule extends ToolCallRule {
     if (command === null) return this.none();
 
     const assignments = command.assignments();
-    const viaEnvironment = Object.keys(assignments).some((name) => name === 'AGENT_GUARD_BYPASS');
-    const viaText = /AGENT_GUARD_BYPASS/.test(command.raw);
+    const viaEnvironment = Object.keys(assignments).some((name) => name === 'AGENTKEEPER_BYPASS');
+    const viaText = /AGENTKEEPER_BYPASS/.test(command.raw);
     if (!viaEnvironment && !viaText) return this.none();
 
     return [
       this.finding({
         title: this.title,
-        detail: `The command sets AGENT_GUARD_BYPASS: ${command.raw}`,
+        detail: `The command sets AGENTKEEPER_BYPASS: ${command.raw}`,
         subject: command.raw,
         location: null,
       }),

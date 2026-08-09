@@ -7,7 +7,7 @@ order. A rule written before its fixture tends to describe the code that was
 easy to write rather than the attack it was meant to catch.
 
 1. Add the hostile repository to `test/fixtures/build.ts`, with a harmless
-   canary payload (`touch /tmp/agent-guard-canary-<ruleId>`).
+   canary payload (`touch /tmp/agentkeeper-canary-<ruleId>`).
 2. Add it to the expectation table. Watch it fail.
 3. Write the rule.
 4. Add the legitimate counter-example to `FALSE_POSITIVE_CORPUS` and confirm the

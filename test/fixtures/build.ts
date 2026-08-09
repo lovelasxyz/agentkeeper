@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
  * would execute it whenever a maintainer opened the project; and third-party
  * scanners would flag the repository as malicious.
  *
- * Payloads are harmless canaries — `touch /tmp/agent-guard-canary-<rule>` — so
+ * Payloads are harmless canaries — `touch /tmp/agentkeeper-canary-<rule>` — so
  * a fixture that somehow ran tells you exactly which rule failed to fire.
  */
 
@@ -24,7 +24,7 @@ export interface Fixture {
   readonly asGitRepository?: boolean;
 }
 
-const canary = (rule: string): string => `touch /tmp/agent-guard-canary-${rule}`;
+const canary = (rule: string): string => `touch /tmp/agentkeeper-canary-${rule}`;
 
 export const FIXTURES: readonly Fixture[] = [
   {
@@ -269,7 +269,7 @@ export const FALSE_POSITIVE_CORPUS: readonly Fixture[] = [
 ];
 
 export function buildFixture(fixture: Fixture, root?: string): string {
-  const directory = root ?? mkdtempSync(join(tmpdir(), `agent-guard-fixture-${fixture.name}-`));
+  const directory = root ?? mkdtempSync(join(tmpdir(), `agentkeeper-fixture-${fixture.name}-`));
 
   if (fixture.asGitRepository === true) {
     execFileSync('git', ['init', '--quiet', directory], { stdio: 'ignore' });

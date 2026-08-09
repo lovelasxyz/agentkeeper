@@ -18,6 +18,7 @@ export class BubblewrapArgumentBuilder {
     const args: string[] = [
       '--die-with-parent',
       '--unshare-user',
+      '--unshare-net',
       '--unshare-pid',
       '--unshare-uts',
       '--unshare-ipc',
@@ -28,8 +29,6 @@ export class BubblewrapArgumentBuilder {
       '--dev',
       '/dev',
     ];
-
-    if (policy.network.length === 0) args.push('--unshare-net');
 
     for (const root of SYSTEM_ROOTS) args.push('--ro-bind-try', root, root);
 

@@ -1,5 +1,16 @@
 import { randomBytes } from 'node:crypto';
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 import { RealPathResolver } from './RealPathResolver.js';
 import type { FileStat, FileSystem, ListOptions } from '../../application/ports/index.js';
@@ -19,20 +30,41 @@ const DEFAULT_IGNORES = [
   'coverage',
 ];
 
-const MAX_ARTIFACT_BYTES = 512 * 1024;
+export class FileListingLimitError extends Error {
+  constructor(readonly root: AbsolutePath, readonly limit: number, readonly kind: 'entries' | 'depth') {
+    super(
+      `Refusing a partial filesystem result for ${root.value}: ${kind} limit ${limit} was reached`,
+    );
+    this.name = 'FileListingLimitError';
+  }
+}
+
+export type FileOperation = 'read' | 'stat' | 'list' | 'move';
+
+export class FileSystemAccessError extends Error {
+  readonly code: string | null;
+
+  constructor(
+    readonly operation: FileOperation,
+    readonly path: AbsolutePath,
+    cause: unknown,
+  ) {
+    const code = errorCode(cause);
+    super(`${operation} failed for ${path.value}${code === null ? '' : ` (${code})`}`, { cause });
+    this.name = 'FileSystemAccessError';
+    this.code = code;
+  }
+}
 
 export class NodeFileSystem implements FileSystem {
   constructor(private readonly realPaths = new RealPathResolver()) {}
 
   async read(path: AbsolutePath): Promise<string | null> {
     try {
-      const info = await stat(path.value);
-      // A rule reads text. Anything this large is a build artifact, and holding
-      // it in memory would blow the scan budget for no benefit.
-      if (info.size > MAX_ARTIFACT_BYTES) return null;
       return await readFile(path.value, 'utf8');
-    } catch {
-      return null;
+    } catch (cause) {
+      if (isMissing(cause)) return null;
+      throw new FileSystemAccessError('read', path, cause);
     }
   }
 
@@ -49,6 +81,15 @@ export class NodeFileSystem implements FileSystem {
     await appendFile(path.value, content, { mode: 0o600 });
   }
 
+  async move(source: AbsolutePath, destination: AbsolutePath): Promise<void> {
+    try {
+      await this.makeDirectory(destination.parent);
+      await rename(source.value, destination.value);
+    } catch (cause) {
+      throw new FileSystemAccessError('move', source, cause);
+    }
+  }
+
   async exists(path: AbsolutePath): Promise<boolean> {
     return (await this.stat(path)) !== null;
   }
@@ -61,13 +102,26 @@ export class NodeFileSystem implements FileSystem {
         size: info.size,
         modifiedAt: info.mtime,
       };
-    } catch {
-      return null;
+    } catch (cause) {
+      if (isMissing(cause)) return null;
+      throw new FileSystemAccessError('stat', path, cause);
     }
   }
 
   async makeDirectory(path: AbsolutePath): Promise<void> {
     await mkdir(path.value, { recursive: true, mode: 0o700 });
+  }
+
+  async makeTemporaryDirectory(parent: AbsolutePath, prefix: string): Promise<AbsolutePath> {
+    if (!/^[a-z0-9][a-z0-9-]*-$/i.test(prefix)) {
+      throw new Error(`Unsafe temporary-directory prefix: ${JSON.stringify(prefix)}`);
+    }
+    await mkdir(parent.value, { recursive: true, mode: 0o700 });
+    const created = AbsolutePath.of(await mkdtemp(parent.join(prefix).value));
+    // mkdtemp normally honours 0700 already; chmod makes the invariant
+    // explicit even under an unusual process umask.
+    if (process.platform !== 'win32') await chmod(created.value, 0o700);
+    return this.realPath(created);
   }
 
   async remove(path: AbsolutePath): Promise<void> {
@@ -77,29 +131,48 @@ export class NodeFileSystem implements FileSystem {
   async list(root: AbsolutePath, options: ListOptions = {}): Promise<readonly AbsolutePath[]> {
     const ignores = new Set(options.ignoreDirectories ?? DEFAULT_IGNORES);
     const limit = options.maxEntries ?? 20_000;
+    const maxDepth = options.maxDepth ?? 12;
     const found: AbsolutePath[] = [];
 
     const walk = async (directory: AbsolutePath, depth: number): Promise<void> => {
-      if (found.length >= limit || depth > 12) return;
+      if (found.length >= limit) {
+        if (options.failOnLimit === true) throw new FileListingLimitError(root, limit, 'entries');
+        return;
+      }
+      if (depth > maxDepth) {
+        if (options.failOnLimit === true) {
+          throw new FileListingLimitError(root, maxDepth, 'depth');
+        }
+        return;
+      }
 
       let entries;
       try {
         entries = await readdir(directory.value, { withFileTypes: true });
-      } catch {
+      } catch (cause) {
+        if (options.failOnError === true && !isMissing(cause)) {
+          throw new FileSystemAccessError('list', directory, cause);
+        }
         return;
       }
 
       for (const entry of entries) {
-        if (found.length >= limit) return;
+        if (found.length >= limit) {
+          if (options.failOnLimit === true) {
+            throw new FileListingLimitError(root, limit, 'entries');
+          }
+          return;
+        }
         const child = directory.join(entry.name);
 
         if (entry.isDirectory()) {
           // `.git` is walked deliberately: `.git/hooks` is vector V1.
           if (ignores.has(entry.name)) continue;
+          if (options.shouldDescend?.(child) === false) continue;
           await walk(child, depth + 1);
           continue;
         }
-        if (entry.isFile()) found.push(child);
+        if (entry.isFile() && options.includeFile?.(child) !== false) found.push(child);
       }
     };
 
@@ -110,4 +183,15 @@ export class NodeFileSystem implements FileSystem {
   realPath(path: AbsolutePath): AbsolutePath {
     return this.realPaths.resolve(path);
   }
+}
+
+function errorCode(cause: unknown): string | null {
+  if (typeof cause !== 'object' || cause === null || !('code' in cause)) return null;
+  const code = (cause as { readonly code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+function isMissing(cause: unknown): boolean {
+  const code = errorCode(cause);
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StarterProfile, type StarterProfileSpec } from '../../domain/policy/StarterProfile.js';
@@ -35,8 +36,23 @@ export class ProfileLoader {
   }
 }
 
+/**
+ * Walks up from this module until it finds the shipped `profiles/` directory.
+ *
+ * A fixed number of `..` segments would only be right for one build layout, and
+ * there are two: the type-checked output under `dist/infrastructure/config`,
+ * and the bundled single-file CLI at `dist/cli.js`. Searching upwards is
+ * correct for both, and for `npm link` besides.
+ */
 function defaultProfileDirectory(): AbsolutePath {
-  // dist/infrastructure/config/ProfileLoader.js → package root → profiles/
-  const here = dirname(fileURLToPath(import.meta.url));
-  return AbsolutePath.of(join(here, '..', '..', '..', 'profiles'));
+  let directory = AbsolutePath.of(dirname(fileURLToPath(import.meta.url)));
+
+  for (let depth = 0; depth < 6 && directory.value !== '/'; depth += 1) {
+    const candidate = directory.join('profiles');
+    if (existsSync(candidate.value)) return candidate;
+    directory = directory.parent;
+  }
+  // Nothing found: report the conventional location so the error names a path
+  // the user can actually check.
+  return AbsolutePath.of(dirname(fileURLToPath(import.meta.url))).join('..', 'profiles');
 }

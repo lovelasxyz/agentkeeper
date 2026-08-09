@@ -4,5 +4,15 @@
   "description": "The workspace and nothing else. Expect questions in the first week.",
   "reads": [],
   "writes": [],
-  "network": ["tcp:443", "udp:53"]
+  "network": [
+    "*.anthropic.com:443",
+    "claude.ai:443",
+    "*.claude.ai:443",
+    "*.openai.com:443",
+    "chatgpt.com:443",
+    "*.chatgpt.com:443",
+    "*.googleapis.com:443",
+    "accounts.google.com:443",
+    "openrouter.ai:443"
+  ]
 }

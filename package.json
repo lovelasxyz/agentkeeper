@@ -1,5 +1,5 @@
 {
-  "name": "agent-guard",
+  "name": "agentkeeper",
   "version": "0.1.0",
   "description": "Confine AI coding agents to what they need: OS-level sandboxing plus a thin detection layer. No Docker, no daemon in the cloud, no telemetry.",
   "keywords": [
@@ -15,10 +15,10 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.21.0"
   },
   "bin": {
-    "agent-guard": "dist/presentation/cli/main.js"
+    "agentkeeper": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -39,7 +39,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
-    "clean": "rm -rf dist coverage",
+    "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
+    "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit --project integration",
     "test:watch": "vitest",
@@ -49,12 +50,18 @@
     "coverage": "vitest run --project unit --project integration --coverage",
     "lint:arch": "depcruise src --config .dependency-cruiser.cjs",
     "verify": "npm run typecheck && npm run lint:arch && npm run coverage && npm run test:sandbox",
-    "prepack": "npm run clean && npm run build"
+    "verify:package": "node scripts/verify-package.mjs",
+    "prepack": "npm run build && npm run verify:package",
+    "bench": "npm run build && node test/e2e/bench.mjs dist/cli.js",
+    "test:mutation": "stryker run"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^3.2.7",
     "dependency-cruiser": "^16.9.0",
+    "esbuild": "^0.28.1",
     "fast-check": "^3.23.2",
     "typescript": "^5.7.2",
     "vitest": "^3.2.7"

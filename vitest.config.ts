@@ -55,8 +55,10 @@ export default defineConfig({
         'src/infrastructure/adapters.ts',
         'src/infrastructure/sandbox/SeatbeltRunner.ts',
         'src/infrastructure/sandbox/BubblewrapRunner.ts',
+        'src/infrastructure/sandbox/WindowsSandboxRunner.ts',
         'src/infrastructure/sandbox/NoopRunner.ts',
         'src/infrastructure/sandbox/SandboxRunnerFactory.ts',
+        'src/infrastructure/network/NodeDestinationBroker.ts',
       ],
       thresholds: {
         lines: 85,

@@ -3,8 +3,8 @@ import type { FileSystem } from '../../application/ports/index.js';
 
 export type { Integration, PlannedChange } from '../../application/ports/Integration.js';
 
-export const MARKER_START = '# >>> agent-guard >>>';
-export const MARKER_END = '# <<< agent-guard <<<';
+export const MARKER_START = '# >>> agentkeeper >>>';
+export const MARKER_END = '# <<< agentkeeper <<<';
 
 /**
  * Wraps a shell snippet in removable markers.

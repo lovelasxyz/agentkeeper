@@ -43,10 +43,13 @@ export class EvaluateToolCall {
     }
 
     const asking = report.interrupting();
+    const stored = new Map(
+      (await this.decisions.all()).map((decision) => [decision.key, decision]),
+    );
     const undecided: Finding[] = [];
     for (const finding of asking) {
-      const previous = await this.decisions.find(finding.decisionKey);
-      if (previous === null) undecided.push(finding);
+      const previous = stored.get(finding.decisionKey);
+      if (previous === undefined) undecided.push(finding);
       else if (previous.verdict === 'deny') {
         await this.record('toolcall.denied-by-decision', call, [finding]);
         return { decision: 'deny', reason: finding.detail, findings: [finding] };
@@ -70,15 +73,21 @@ export class EvaluateToolCall {
     call: ToolCall,
     findings: readonly Finding[],
   ): Promise<void> {
-    await this.audit.append({
-      at: this.clock.now(),
-      event,
-      details: {
-        tool: call.tool,
-        rules: findings.map((finding) => finding.ruleId.toString()),
-        subjects: findings.map((finding) => finding.subject),
-        disposition: Disposition.strictest(findings.map((finding) => finding.disposition)).name,
-      },
-    });
+    try {
+      await this.audit.append({
+        at: this.clock.now(),
+        event,
+        details: {
+          tool: call.tool,
+          rules: findings.map((finding) => finding.ruleId.toString()),
+          subjects: findings.map((finding) => finding.subject),
+          disposition: Disposition.strictest(findings.map((finding) => finding.disposition)).name,
+        },
+      });
+    } catch {
+      // Audit is evidence, not authority. A full disk, a truncated log, or the
+      // deliberately read-only in-sandbox control plane must never turn a deny
+      // into HookCommand's fail-open error path.
+    }
   }
 }

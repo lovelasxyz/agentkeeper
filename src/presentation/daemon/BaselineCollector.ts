@@ -3,6 +3,20 @@ import type { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 import type { PathContext } from '../../domain/paths/PathContext.js';
 import type { SensitivePathRegistry } from '../../domain/paths/SensitivePathRegistry.js';
 import type { BaselineEntry, Clock, FileSystem } from '../../application/ports/index.js';
+import { mapWithConcurrency } from '../../application/services/BoundedConcurrency.js';
+
+const BASELINE_IO_CONCURRENCY = 8;
+// `.npmrc` is primarily a credential surface but its registry setting is also
+// executable supply-chain state (AG-P007). Categorising it once must not make
+// that persistence rule unreachable.
+const PERSISTENCE_COMPANION_IDS = new Set(['npmrc']);
+const SELF_MUTATING_STATE_FILES = new Set([
+  'audit',
+  'audit.log',
+  'baseline.json',
+  'persistence-pending.json',
+  'pause.json',
+]);
 
 /**
  * Snapshots zone B — the persistence surfaces outside any repository (spec §5).
@@ -23,32 +37,98 @@ export class BaselineCollector {
     const found = new Map<string, AbsolutePath>();
 
     for (const entry of this.registry.forPlatform(context.platform)) {
-      if (entry.category !== 'persistence') continue;
+      if (entry.category !== 'persistence' && !PERSISTENCE_COMPANION_IDS.has(entry.id)) continue;
       const anchor = entry.literalPrefix(context.home);
       if (anchor === null) continue;
+      if (entry.id === 'agentkeeper-state') {
+        // decisions/audit/baseline are intentionally mutable control-plane
+        // files. Hashing them would make the daemon react to its own writes.
+        // The paths below are configuration or checksum-managed code and must
+        // remain stable outside explicit activate/repair operations.
+        for (const relative of [
+          'config.json',
+          'allowlist.json',
+          'installation/manifest.json',
+          'installation/backups',
+          'shell',
+          'shims',
+        ]) {
+          const target = context.home.join('.agentkeeper', relative);
+          found.set(target.value, target);
+        }
+        continue;
+      }
       found.set(anchor.value, anchor);
     }
     return [...found.values()];
   }
 
-  async collect(context: PathContext): Promise<readonly BaselineEntry[]> {
-    const entries: BaselineEntry[] = [];
+  /** Watch parent state changes, while collection excludes self-mutating files. */
+  watchTargets(context: PathContext): readonly AbsolutePath[] {
+    const stateDir = context.home.join('.agentkeeper');
+    const targets = this.targets(context).filter((target) => !stateDir.contains(target));
+    return [...targets, stateDir];
+  }
 
-    for (const target of this.targets(context)) {
-      const info = await this.files.stat(target);
-      if (info === null) continue;
-
-      if (info.isDirectory) {
-        for (const child of await this.files.list(target, { maxEntries: 200 })) {
-          const entry = await this.entryFor(child);
-          if (entry !== null) entries.push(entry);
-        }
-        continue;
-      }
-      const entry = await this.entryFor(target);
-      if (entry !== null) entries.push(entry);
+  /**
+   * Filters events produced by the daemon's own append/atomic-write cycle.
+   * A null path is never guessed away: some watcher backends cannot provide a
+   * filename and must conservatively trigger a comparison.
+   */
+  isRelevantWatchEvent(path: AbsolutePath | null, context: PathContext): boolean {
+    if (path === null) return true;
+    const stateDir = context.home.join('.agentkeeper');
+    if (!stateDir.contains(path) || path.equals(stateDir)) return true;
+    // NodeFileSystem's atomic staging file is not authoritative; the following
+    // rename event for the real path is. Ignoring only its collision-resistant
+    // suffix keeps a legitimate permanent `*.tmp` shim in scope.
+    if (/\.[0-9a-f]{12}\.tmp$/i.test(path.basename)) return false;
+    const relative = path.value.slice(stateDir.value.length + 1);
+    const topLevel = relative.split('/')[0] ?? '';
+    for (const mutable of SELF_MUTATING_STATE_FILES) {
+      if (topLevel === mutable) return false;
+      if (topLevel.startsWith(`${mutable}.`) && topLevel.endsWith('.tmp')) return false;
     }
-    return entries;
+    return true;
+  }
+
+  async collect(context: PathContext): Promise<readonly BaselineEntry[]> {
+    const inspected = await mapWithConcurrency(
+      this.targets(context),
+      BASELINE_IO_CONCURRENCY,
+      async (target) => ({ target, info: await this.files.stat(target) }),
+    );
+    const expanded = await mapWithConcurrency(
+      inspected,
+      BASELINE_IO_CONCURRENCY,
+      async ({ target, info }): Promise<readonly AbsolutePath[]> => {
+        if (info === null) return [];
+        if (!info.isDirectory) return [target];
+        try {
+          return await this.files.list(target, {
+            maxEntries: 2_000,
+            maxDepth: 8,
+            failOnLimit: true,
+            failOnError: true,
+          });
+        } catch (error) {
+          // A surface this process may never read — `/private/var/at/tabs`
+          // needs root on macOS — contributes nothing at baseline time and
+          // nothing at comparison time, so skipping it loses no tamper signal.
+          // Aborting instead made `activate` fail on a stock machine. Any
+          // other failure still stops the snapshot: a silently thin baseline
+          // would read as "nothing changed" forever after.
+          if (!isPermissionDenied(error)) throw error;
+          return [];
+        }
+      },
+    );
+    const entries = await mapWithConcurrency(
+      expanded.flat(),
+      BASELINE_IO_CONCURRENCY,
+      (path) => this.entryFor(path),
+    );
+    return entries.filter((entry): entry is BaselineEntry => entry !== null);
   }
 
   private async entryFor(path: AbsolutePath): Promise<BaselineEntry | null> {
@@ -56,4 +136,10 @@ export class BaselineCollector {
     if (content === null) return null;
     return { path, hash: ContentHash.fromContent(content), recordedAt: this.clock.now() };
   }
+}
+
+/** Duck-typed on purpose: the port must not leak a concrete adapter's error class. */
+function isPermissionDenied(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'EACCES' || code === 'EPERM';
 }

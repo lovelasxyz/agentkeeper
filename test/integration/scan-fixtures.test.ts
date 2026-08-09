@@ -22,6 +22,7 @@ class EmptyDecisions implements DecisionStore {
     return null;
   }
   async record(): Promise<void> {}
+  async recordMany(): Promise<void> {}
   async all(): Promise<readonly Decision[]> {
     return [];
   }
@@ -33,6 +34,7 @@ const scanner = new ScanWorkspace(
   new ScanEngine(RuleRegistry.of(ARTIFACT_RULES)),
   new EmptyDecisions(),
   ALL_RULES_ENABLED,
+  { now: () => new Date(0) },
 );
 
 let root: string;
@@ -44,7 +46,7 @@ const scan = async (fixture: Fixture): Promise<string[]> => {
 };
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), 'agent-guard-fixtures-'));
+  root = mkdtempSync(join(tmpdir(), 'agentkeeper-fixtures-'));
 });
 
 afterAll(() => {

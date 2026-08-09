@@ -1,7 +1,7 @@
 /**
  * Public API.
  *
- * agent-guard is primarily a command-line tool, but the policy model and the
+ * agentkeeper is primarily a command-line tool, but the policy model and the
  * rule engine are useful on their own — for a custom scanner, a CI check, or a
  * different front end. Only the pure parts are exported: everything here can be
  * used without touching the filesystem.
@@ -38,6 +38,15 @@ export { PolicyBuilder, UnsafeWorkspaceError } from './domain/policy/PolicyBuild
 export { AccessTierResolver } from './domain/policy/AccessTierResolver.js';
 export { StarterProfile } from './domain/policy/StarterProfile.js';
 export { DenyRule } from './domain/policy/DenyRule.js';
+export {
+  EnvironmentPolicy,
+  PROVIDER_API_KEYS,
+  type ProviderApiKey,
+} from './domain/policy/EnvironmentPolicy.js';
+export {
+  EnvironmentSanitizer,
+  EnvironmentSanitizationResult,
+} from './domain/policy/EnvironmentSanitizer.js';
 
 export { Rule } from './domain/rules/Rule.js';
 export { RuleRegistry, ALL_RULES_ENABLED } from './domain/rules/RuleRegistry.js';

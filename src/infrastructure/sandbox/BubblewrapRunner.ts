@@ -44,6 +44,18 @@ export class BubblewrapRunner implements SandboxRunner {
 
     for (const deny of policy.denies) {
       if (deny.pattern.literalPrefix(context.home) === null) {
+        // Outside-workspace wildcard denies are enforced by the empty-home
+        // topology: nothing outside the workspace exists unless a profile or
+        // runtime grant mounted it. Bundled profile roots are reviewed as part
+        // of the TCB. A broad runtime subtree is not, so it remains a loud gap.
+        if (
+          deny.exceptWithin !== null &&
+          policy.runtimeRefs.every(
+            (ref) => ref.scope === 'file' || context.workspace.contains(ref.path),
+          )
+        ) {
+          continue;
+        }
         gaps.push(
           `${deny.sourceId}: "${deny.pattern.raw}" has no fixed anchor, and a mount ` +
             'namespace cannot express a wildcard refusal. Layer 2 still blocks it.',
@@ -51,18 +63,23 @@ export class BubblewrapRunner implements SandboxRunner {
       }
     }
 
-    const ports = policy.network.filter((rule) => rule.port !== '*');
-    if (ports.length > 0) {
+    if (
+      policy.network.length > 0 &&
+      !(
+        policy.networkEnforcement.kind === 'brokered' &&
+        policy.networkEnforcement.transport.kind === 'unix-socket-relay'
+      )
+    ) {
       gaps.push(
-        `network is on or off here, so ${ports.map(String).join(', ')} becomes ` +
-          'unrestricted outbound access.',
+        `bubblewrap has no verified Unix-relay network broker for ${policy.network.map(String).join(', ')}; ` +
+          'the network namespace remains isolated and outbound traffic stays blocked.',
       );
     }
     return gaps;
   }
 
   buildArgs(policy: SandboxPolicy, context: PathContext, command: SandboxCommand): string[] {
-    return this.args.build(policy, context, command);
+    return this.args.build(policy, context, this.withNetworkRelay(policy, command));
   }
 
   async run(
@@ -70,11 +87,37 @@ export class BubblewrapRunner implements SandboxRunner {
     context: PathContext,
     command: SandboxCommand,
   ): Promise<SandboxRunResult> {
+    const gaps = this.unenforceable(policy, context);
+    if (gaps.length > 0) {
+      throw new Error(`Refusing an unenforceable bubblewrap policy: ${gaps.join(' ')}`);
+    }
     const executable = await this.locate();
     if (executable === null) {
       throw new Error('bubblewrap (bwrap) is not installed; refusing to run unconfined');
     }
     return this.spawnConfined(executable, this.buildArgs(policy, context, command), command);
+  }
+
+  private withNetworkRelay(policy: SandboxPolicy, command: SandboxCommand): SandboxCommand {
+    if (
+      policy.networkEnforcement.kind !== 'brokered' ||
+      policy.networkEnforcement.transport.kind !== 'unix-socket-relay'
+    ) {
+      return command;
+    }
+    const transport = policy.networkEnforcement.transport;
+    return {
+      executable: process.execPath,
+      args: [
+        transport.relayScript.value,
+        transport.socketPath.value,
+        String(transport.port),
+        command.executable,
+        ...command.args,
+      ],
+      cwd: command.cwd,
+      env: command.env,
+    };
   }
 
   private async locate(): Promise<string | null> {

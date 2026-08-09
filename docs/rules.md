@@ -27,7 +27,7 @@ Generated from the code, so the table cannot drift from what actually runs.
 | AG-B002 | Tool call reads an environment file outside the workspace | critical | block |
 | AG-B003 | Tool call writes agent configuration | critical | block |
 | AG-B004 | Tool call changes where git looks for hooks | critical | block |
-| AG-B005 | Tool call modifies agent-guard itself | critical | block |
+| AG-B005 | Tool call modifies agentkeeper itself | critical | block |
 | AG-B006 | Tool call tries to start a command with isolation disabled | critical | block |
 | AG-A001 | Force push to a protected branch | high | ask |
 | AG-A002 | Package publication | critical | ask |
@@ -43,6 +43,6 @@ Generated from the code, so the table cannot drift from what actually runs.
 | AG-P005 | Scheduled tasks changed | critical | ask |
 | AG-P006 | SSH access or configuration changed | critical | ask |
 | AG-P007 | ~/.npmrc registry or token changed | high | ask |
-| AG-P008 | Agent configuration changed outside agent-guard | high | ask |
+| AG-P008 | Agent configuration changed outside agentkeeper | high | ask |
 
 Family B is never disabled by configuration. Family A is off by default — see the README for why.

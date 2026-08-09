@@ -15,8 +15,8 @@ import type { PathContext } from '../../src/domain/paths/PathContext.js';
 import type { Integration } from '../../src/application/ports/Integration.js';
 
 const HOME = AbsolutePath.of('/Users/dev');
-const STATE = HOME.join('.agent-guard');
-const BIN = '/usr/local/bin/agent-guard';
+const STATE = HOME.join('.agentkeeper');
+const BIN = '/usr/local/bin/agentkeeper';
 
 async function roundTrip(
   files: InMemoryFileSystem,
@@ -166,14 +166,14 @@ describe('DaemonIntegration', () => {
   it('writes a user-level launch agent on macOS, never a system one', async () => {
     const files = new InMemoryFileSystem();
     const changes = await new DaemonIntegration(files, HOME, 'darwin', BIN).plan();
-    expect(changes[0]?.path.value).toBe('/Users/dev/Library/LaunchAgents/dev.agent-guard.watcher.plist');
+    expect(changes[0]?.path.value).toBe('/Users/dev/Library/LaunchAgents/dev.agentkeeper.watcher.plist');
     expect(changes[0]?.after).toContain('<key>RunAtLoad</key>');
   });
 
   it('writes a systemd user unit on Linux', async () => {
     const files = new InMemoryFileSystem();
     const changes = await new DaemonIntegration(files, HOME, 'linux', BIN).plan();
-    expect(changes[0]?.path.value).toBe('/Users/dev/.config/systemd/user/agent-guard.service');
+    expect(changes[0]?.path.value).toBe('/Users/dev/.config/systemd/user/agentkeeper.service');
     expect(changes[0]?.after).toContain('WantedBy=default.target');
   });
 
@@ -234,6 +234,55 @@ describe('Configuration', () => {
     expect(config.onUnavailable).toBe('fail');
   });
 
+  it('does not let malformed security fields turn fail-closed into an unconfined run', async () => {
+    const files = new InMemoryFileSystem();
+    await files.write(
+      STATE.join('config.json'),
+      JSON.stringify({
+        version: 1,
+        sandbox: { enabled: 'yes', onUnavailable: 'continue-anyway' },
+        strictMode: 'no',
+        rules: { categoryA: { enabled: 'sometimes' } },
+      }),
+    );
+
+    const config = await Configuration.load(files, STATE);
+    expect(config.sandboxEnabled).toBe(true);
+    expect(config.onUnavailable).toBe('fail');
+    expect(config.strictMode).toBe(false);
+    expect(config.isEnabled('AG-A001')).toBe(false);
+  });
+
+  it('refuses configuration schemas from another version', async () => {
+    const files = new InMemoryFileSystem();
+    await files.write(
+      STATE.join('config.json'),
+      JSON.stringify({ version: 99, sandbox: { enabled: false, onUnavailable: 'warn' } }),
+    );
+
+    const config = await Configuration.load(files, STATE);
+    expect(config.sandboxEnabled).toBe(true);
+    expect(config.onUnavailable).toBe('fail');
+  });
+
+  it('validates collections and bounded numeric settings instead of trusting JSON shapes', async () => {
+    const files = new InMemoryFileSystem();
+    await files.write(
+      STATE.join('config.json'),
+      JSON.stringify({
+        version: 1,
+        watchRoots: ['~/projects', 7, null],
+        notifications: 'webhook',
+        logRetentionDays: -10,
+      }),
+    );
+
+    const config = await Configuration.load(files, STATE);
+    expect(config.watchRoots(HOME).map(String)).toEqual(['/Users/dev/projects']);
+    expect(config.document.notifications).toBe('native');
+    expect(config.document.logRetentionDays).toBe(90);
+  });
+
   it('resolves watch roots against the home directory', async () => {
     const files = new InMemoryFileSystem();
     await files.write(
@@ -260,6 +309,7 @@ describe('BaselineCollector', () => {
     );
     const targets = collector.targets(context).map(String);
     expect(targets).toContain('/Users/dev/.zshenv');
+    expect(targets).toContain('/Users/dev/.npmrc');
     expect(targets).toContain('/Users/dev/Library/LaunchAgents');
     expect(targets).not.toContain('/Users/dev/.config/systemd/user'); // Linux only
   });
@@ -282,11 +332,75 @@ describe('BaselineCollector', () => {
     expect(snapshot.map((entry) => entry.path.value)).toEqual(['/Users/dev/.zshenv']);
   });
 
+  it('keeps collecting when a persistence surface is unreadable without root', async () => {
+    // `/private/var/at/tabs` is root-only on macOS. Aborting the snapshot there
+    // made `activate` fail outright on a stock machine.
+    const files = new InMemoryFileSystem();
+    await files.write(HOME.join('.zshenv'), 'export A=1\n');
+    const denied = Object.assign(new Error('list failed for /private/var/at/tabs (EACCES)'), {
+      code: 'EACCES',
+    });
+    const guarded = Object.create(files) as InMemoryFileSystem;
+    guarded.list = async (root, options) => {
+      if (root.value === '/private/var/at/tabs') throw denied;
+      return files.list(root, options);
+    };
+    await files.write(AbsolutePath.of('/private/var/at/tabs/root'), '* * * * * echo hi\n');
+
+    const collector = new BaselineCollector(
+      guarded,
+      SensitivePathRegistry.default(),
+      new FixedClock(),
+    );
+
+    const snapshot = await collector.collect(context);
+    expect(snapshot.map((entry) => entry.path.value)).toEqual(['/Users/dev/.zshenv']);
+  });
+
+  it('still reports an unexpected filesystem failure instead of a thin baseline', async () => {
+    const files = new InMemoryFileSystem();
+    await files.write(HOME.join('.zshenv'), 'export A=1\n');
+    await files.write(HOME.join('Library/LaunchAgents/some.plist'), '<plist/>\n');
+    const guarded = Object.create(files) as InMemoryFileSystem;
+    guarded.list = async () => {
+      throw Object.assign(new Error('list failed (EIO)'), { code: 'EIO' });
+    };
+    const collector = new BaselineCollector(
+      guarded,
+      SensitivePathRegistry.default(),
+      new FixedClock(),
+    );
+
+    await expect(collector.collect(context)).rejects.toThrow(/EIO/);
+  });
+
   it('records digests, never content', async () => {
     const files = new InMemoryFileSystem();
     await files.write(HOME.join('.zshenv'), 'export SECRET=hunter2\n');
     const collector = new BaselineCollector(files, SensitivePathRegistry.default(), new FixedClock());
 
     expect(JSON.stringify(await collector.collect(context))).not.toContain('hunter2');
+  });
+
+  it('suppresses its mutable control-plane writes but not protected configuration events', () => {
+    const collector = new BaselineCollector(
+      new InMemoryFileSystem(),
+      SensitivePathRegistry.default(),
+      new FixedClock(),
+    );
+
+    expect(collector.isRelevantWatchEvent(STATE.join('audit.log'), context)).toBe(false);
+    expect(
+      collector.isRelevantWatchEvent(STATE.join('audit/audit-1.open.jsonl'), context),
+    ).toBe(false);
+    expect(collector.isRelevantWatchEvent(STATE.join('baseline.json.a1b2.tmp'), context)).toBe(false);
+    expect(collector.isRelevantWatchEvent(STATE.join('config.json.a1b2c3d4e5f6.tmp'), context)).toBe(false);
+    expect(collector.isRelevantWatchEvent(STATE.join('shims/kept.tmp'), context)).toBe(true);
+    expect(collector.isRelevantWatchEvent(STATE.join('persistence-pending.json'), context)).toBe(false);
+    expect(collector.isRelevantWatchEvent(STATE.join('pause.json'), context)).toBe(false);
+    expect(collector.isRelevantWatchEvent(STATE.join('decisions.json'), context)).toBe(true);
+    expect(collector.isRelevantWatchEvent(STATE.join('config.json'), context)).toBe(true);
+    expect(collector.isRelevantWatchEvent(HOME.join('.zshenv'), context)).toBe(true);
+    expect(collector.isRelevantWatchEvent(null, context)).toBe(true);
   });
 });

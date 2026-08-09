@@ -49,6 +49,11 @@ describe('SeatbeltProfileCompiler', () => {
     expect(text).toContain('(allow sysctl-read)');
   });
 
+  it('does not grant every Mach service to a compromised agent', () => {
+    const text = compiler.compile(policy(), CTX);
+    expect(text).not.toMatch(/^\(allow mach-lookup\)$/m);
+  });
+
   it('translates a subtree read into a subpath rule', () => {
     const text = compiler.compile(
       policy({ reads: [ResourceRef.subtree(AbsolutePath.of('/opt/tools'))] }),
@@ -144,22 +149,45 @@ describe('SeatbeltProfileCompiler', () => {
       expect(text).not.toContain('network-outbound');
     });
 
-    it('emits a port rule', () => {
-      const text = compiler.compile(policy({ network: [NetworkRule.tcp(443)] }), CTX);
-      expect(text).toContain('(allow network-outbound (remote tcp "*:443"))');
-    });
-
-    it('emits loopback access as an ip rule and allows binding', () => {
-      const text = compiler.compile(policy({ network: [NetworkRule.loopback()] }), CTX);
-      expect(text).toContain('(allow network-outbound (remote ip "localhost:*"))');
-      expect(text).toContain('(allow network-bind (local ip "localhost:*"))');
-    });
-
-    it('allows the unix socket used for DNS resolution only when networking is on', () => {
-      expect(compiler.compile(policy({ network: [NetworkRule.tcp(443)] }), CTX)).toContain(
-        '(remote unix-socket)',
+    it('does not compile destination names directly when a broker was not configured', () => {
+      const text = compiler.compile(
+        policy({ network: [NetworkRule.destination('api.openai.com', 443)] }),
+        CTX,
       );
-      expect(compiler.compile(policy(), CTX)).not.toContain('unix-socket');
+      expect(text).not.toContain('network-outbound');
+      expect(text).not.toContain('api.openai.com');
+    });
+
+    it('opens exactly the launcher-owned loopback broker port', () => {
+      const text = compiler.compile(
+        policy({
+          network: [NetworkRule.destination('api.openai.com', 443)],
+          networkEnforcement: {
+            kind: 'brokered',
+            transport: { kind: 'tcp-loopback', port: 43117 },
+          },
+        }),
+        CTX,
+      );
+      expect(text).toContain('(allow network-outbound (remote tcp "localhost:43117"))');
+      expect(text).not.toContain('network-bind');
+      expect(text).not.toContain('api.openai.com');
+    });
+
+    it('keeps DNS and arbitrary Unix sockets outside the agent sandbox', () => {
+      const text = compiler.compile(
+        policy({
+          network: [NetworkRule.destination('api.openai.com', 443)],
+          networkEnforcement: {
+            kind: 'brokered',
+            transport: { kind: 'tcp-loopback', port: 43117 },
+          },
+        }),
+        CTX,
+      );
+      expect(text).not.toContain('mDNSResponder');
+      expect(text).not.toContain('(remote unix-socket)');
+      expect(compiler.compile(policy(), CTX)).not.toContain('mDNSResponder');
     });
   });
 

@@ -11,9 +11,13 @@ import { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
  * worst failure this project can have.
  */
 export class RealPathResolver {
+  constructor(
+    private readonly nativeRealPath: (path: string) => string = (path) => realpathSync(path),
+  ) {}
+
   resolve(path: AbsolutePath): AbsolutePath {
     try {
-      return AbsolutePath.of(realpathSync(path.value));
+      return AbsolutePath.of(this.nativeRealPath(path.value));
     } catch {
       // The target may not exist yet (a temp dir, a state dir on first run).
       // Resolve the deepest existing ancestor and re-attach the missing tail.
@@ -29,15 +33,15 @@ export class RealPathResolver {
     const tail: string[] = [];
     let current = path;
 
-    while (current.value !== '/') {
+    while (true) {
       const parent = current.parent;
+      if (parent.equals(current)) return path;
       tail.unshift(current.basename);
       try {
-        return AbsolutePath.of(realpathSync(parent.value)).join(...tail);
+        return AbsolutePath.of(this.nativeRealPath(parent.value)).join(...tail);
       } catch {
         current = parent;
       }
     }
-    return path;
   }
 }

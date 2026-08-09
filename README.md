@@ -1,13 +1,16 @@
-# agent-guard
+# agentkeeper
 
 Confine an AI coding agent to what it needs, using the sandboxing your operating
 system already has. No Docker, no containers, no cloud service, no telemetry —
 and no change to how you work: you keep typing `claude`, `gemini`, `codex`.
 
 ```sh
-npm i -g agent-guard
-agent-guard init
+npm i -g agentkeeper
+agentkeeper activate
 ```
+
+Once. Then keep typing `claude`, `codex`, `gemini`, `opencode` exactly as
+before.
 
 ---
 
@@ -23,7 +26,7 @@ The attack fired, nothing happened, nobody was interrupted.
 So isolation comes first here, and detection is the backup for the places
 isolation cannot reach.
 
-**agent-guard limits what the agent can do, and records what it does. It is
+**agentkeeper limits what the agent can do, and records what it does. It is
 weaker than full container isolation and stronger than any set of rules.**
 
 ---
@@ -33,8 +36,9 @@ weaker than full container isolation and stronger than any set of rules.**
 Two layers, which do not duplicate each other.
 
 **Layer 1 — the sandbox.** The agent starts inside an OS isolation profile:
-`sandbox-exec` (Seatbelt) on macOS, `bubblewrap` on Linux. This decides what
-exists at all.
+`sandbox-exec` (Seatbelt) on macOS, `bubblewrap` on Linux, AppContainer on
+Windows. This decides what exists at all. Outbound traffic goes through a
+destination broker that allows named hosts and refuses everything else.
 
 **Layer 2 — the rules.** A `PreToolUse` hook, a global git hook and a small
 resident watcher observe what happens *inside* that boundary — the things
@@ -49,7 +53,7 @@ Reproduced without softening. "No" means no.
 |---|---|---|---|
 | V1–V3 (autorun artifacts in a repository) | 2 | Yes | Yes |
 | V4 (environment config, CVE-2026-21852) | 1 + 2 | Yes | Yes |
-| V5 (side-channel exfiltration) | 1 | Partly (network profile) | **No** |
+| V5 (side-channel exfiltration) | 1 | Partly (destination allowlist) | **No** |
 | V6 (untrusted input in CI) | 2 | Yes | Yes |
 | V7 (rug-pull) | 2 | Yes | Yes |
 | V8 (MCP server swap) | 1 + 2 | Yes | Yes |
@@ -65,8 +69,9 @@ server, or a second agent, never passes through a tool-call hook at all.
 **On exfiltration, plainly.** Promising to spot a leak in outbound traffic is
 not something this project can honestly do. CVE-2026-54316 leaked an API key one
 character at a time through a Hugging Face download counter; there was nothing
-recognisable in the traffic. The position taken here is: **restrict the network
-with a profile, do not promise to detect what leaves.**
+recognisable in the traffic. The position taken here is: **restrict which
+destinations exist, do not promise to detect what leaves through an allowed
+one.**
 
 ---
 
@@ -91,7 +96,7 @@ These have **no "allow" button anywhere in the interface**. Not "are you sure",
 not "requires confirmation" — absent. The refusal is silent and the event is
 logged.
 
-The only way to grant tier 2 access is to open `~/.agent-guard/allowlist.json`
+The only way to grant tier 2 access is to open `~/.agentkeeper/allowlist.json`
 in a text editor yourself:
 
 ```jsonc
@@ -111,7 +116,7 @@ in a text editor yourself:
 An injection can phrase any request. It cannot open your editor at a different
 moment in time. That gap between *asking* and *receiving* is what makes the
 model hold — and it is enforced structurally, not by trust: the sandbox never
-makes `~/.agent-guard` writable, and rule AG-B005 refuses tool calls that reach
+makes `~/.agentkeeper` writable, and rule AG-B005 refuses tool calls that reach
 for it.
 
 ---
@@ -121,15 +126,16 @@ for it.
 | Limit | What follows |
 |---|---|
 | The profile is fixed when the process starts | A new grant applies to the **next** run. The tool says so instead of pretending otherwise. |
-| Network filtering is per **port**, not per host | Measured, not assumed: Seatbelt rejects a hostname in a network rule outright (`host must be * or localhost`). A per-domain allowlist needs a proxy and is out of scope for 1.0. |
-| On Linux, network is on or off | `bubblewrap` has no per-port control. `agent-guard status` says so. |
-| `sandbox-exec` is deprecated by Apple | Still the only built-in mechanism, still working in current macOS. The risk is stated here rather than hidden. |
+| Nothing inside an allowed destination is inspected | Once `api.anthropic.com:443` is allowed, what travels inside that TLS session is not examined. The alternative is terminating the agent's TLS, which is worse. |
+| macOS reports `DEGRADED`, not `PROTECTED` | The Seatbelt profile denies every credential, persistence and history path but still permits broad reads *outside* home. An enumerated read allowlist crashes the runtime on current macOS, so the gap is reported on every run instead of hidden. |
+| Windows reports `DEGRADED` | AppContainer confines the filesystem and the process tree, but keeps a documented common-system surface, and its egress stays denied rather than brokered. |
+| `sandbox-exec` is deprecated by Apple | Still the built-in mechanism, still working in current macOS. The risk is stated here rather than hidden. |
 | `bwrap` is not installed everywhere | Without it, layer 1 is unavailable and `run` refuses to start rather than run unprotected. |
-| Weaker than a container | Shared kernel, shared network stack. |
+| Weaker than a container | Shared kernel. |
 | The agent can still wreck the workspace | Isolation protects the system, not your working tree — that is what git is for. |
-| Windows | Layer 2 only in 1.0. |
+| The wrapper costs more than the design's 100 ms | Measured: a Node process plus `sandbox-exec` is a ~95 ms floor before agentkeeper does anything. Our own share is ~60 ms; the total a user feels is ~155 ms on a busy machine, less on an idle one. The number in the design brief was written without measuring that floor. |
 
-**When no mechanism is available, `agent-guard run` refuses to start the
+**When no mechanism is available, `agentkeeper run` refuses to start the
 command.** A quiet unprotected launch is worse than no tool at all, because you
 would believe you were covered.
 
@@ -146,9 +152,9 @@ would believe you were covered.
 | A cloud service | No backend, no telemetry, no accounts |
 | A replacement for containers | Weaker guarantees, better ergonomics — see above |
 
-### agent-guard and zizmor
+### agentkeeper and zizmor
 
-| | zizmor | agent-guard |
+| | zizmor | agentkeeper |
 |---|---|---|
 | Workflow structure, permissions, injection sinks | Thorough, structural | Not attempted |
 | Agent-specific CI delta (vulnerable CLI versions, `--yolo`, two passes over one checkout, untrusted trigger + secrets) | — | Yes |
@@ -163,34 +169,58 @@ somebody else does properly.
 ## Usage
 
 ```sh
-agent-guard init                  # set up, showing a diff of every change
-agent-guard run -- claude         # run inside the isolation profile
-agent-guard status                # what is active, and what is not enforced
-agent-guard scan [path]           # inspect a repository (also runs as a git hook)
-agent-guard grants                # what is open; --add, --revoke
-agent-guard log --since 7d        # what was recorded
-agent-guard pause 1h              # silence notifications (isolation stays on)
-agent-guard uninstall             # remove everything, restore the originals
+agentkeeper activate              # set up once, showing a diff of every change
+agentkeeper doctor                # probe the real sandbox; explain every gap
+agentkeeper status                # the same answer, briefly
+agentkeeper policy                # the effective boundary here, and its hash
+agentkeeper integrations          # which agents actually launch through the guard
+agentkeeper allow <path> --read   # open one tier 1 path; --workspace to scope it
+agentkeeper revoke <id>           # close it again
+agentkeeper scan [path]           # inspect a repository (also runs as a git hook)
+agentkeeper log --since 7d        # what was recorded
+agentkeeper pause 1h              # silence notifications (isolation stays on)
+agentkeeper repair                # restore managed files after drift
+agentkeeper run -- <cmd>          # advanced: run anything inside the profile
+agentkeeper deactivate            # remove everything, restore the originals
 ```
 
-After `init` you keep typing `claude` — a shell function routes it through the
-wrapper. `AGENT_GUARD_BYPASS=1 claude` skips it for one command, from *your*
-shell; the same variable coming from inside the agent is refused (AG-B006).
+After `activate` you keep typing `claude` — a shim on `PATH` routes it through
+the boundary.
+
+**There is no environment variable that switches the shim off.** An
+interception any variable can disable is not interception, and a poisoned
+context can produce a variable. If you need to run an agent unconfined, do it
+deliberately: invoke the real binary by its own path, or run
+`agentkeeper deactivate`. A session that ran outside the boundary is reported
+as `BYPASSED`, never as protection.
+
+### Documentation
+
+[Architecture](docs/architecture.md) ·
+[Threat model](docs/threat-model.md) ·
+[Security boundary](docs/security-boundary.md) ·
+[Network model](docs/network-model.md) ·
+[Platform support](docs/platform-support.md) ·
+[Agent compatibility](docs/agent-compatibility.md) ·
+[Policy](docs/policy.md) ·
+[Rules](docs/rules.md) ·
+[Threat coverage](docs/threat-coverage.md) ·
+[Troubleshooting](docs/troubleshooting.md)
 
 ### Starter profiles
 
-`init` offers a pre-filled allowlist so the first week is a handful of questions
+`activate` offers a pre-filled allowlist so the first week is a handful of questions
 rather than a hundred: `web`, `python`, `infra`, `minimal`. They are data files
 under [`profiles/`](profiles/) — pull requests welcome.
 
 ---
 
-## Installing agent-guard does not run any code
+## Installing agentkeeper does not run any code
 
 There is **no `postinstall` script** in this package. A dependency that writes
 itself into your configuration at install time is indistinguishable from
 malware, and that is precisely the ChainDrop signature this tool watches for.
-Nothing happens until you run `agent-guard init`, and `init` shows you a diff of
+Nothing happens until you run `agentkeeper activate`, and it shows you a diff of
 every file it wants to touch.
 
 The same applies to the shell integration. Writing to `~/.zshrc` *is* vector V9.
@@ -229,7 +259,7 @@ day, which directly contradicts the design budget of fewer than one question per
 week. Turn it on if you run an agent unattended:
 
 ```jsonc
-// ~/.agent-guard/config.json
+// ~/.agentkeeper/config.json
 { "version": 1, "rules": { "categoryA": { "enabled": true } } }
 ```
 
@@ -243,6 +273,7 @@ rule. Those are enforced in code, not by convention.
 ```sh
 npm install
 npm test              # unit + integration
+npm run bench         # the performance budgets, measured in a clean process
 npm run test:sandbox  # real isolation, real refusals — the tests that matter
 npm run test:e2e      # install → use → uninstall against the built package
 npm run verify        # everything, plus architecture boundaries and coverage
@@ -260,6 +291,11 @@ tested with a string in and an array out.
 
 Coverage floors: `domain` 100%, `application` 95%, overall 85%. The
 false-positive corpus has a golden finding count; any increase is a red build.
+
+Performance is measured, not asserted. `npm run bench` reports each figure
+against the budget it belongs to, in a clean process — measuring inside the test
+runner inflated everything about fourfold, and `p95(A) - p95(B)` across separate
+batches turned out to be noise rather than a difference.
 
 ---
 

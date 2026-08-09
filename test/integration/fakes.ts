@@ -27,6 +27,7 @@ import type { Platform } from '../../src/domain/value-objects/Platform.js';
 export class InMemoryFileSystem implements FileSystem {
   readonly files = new Map<string, string>();
   private readonly directories = new Set<string>(['/']);
+  private temporarySequence = 0;
 
   async read(path: AbsolutePath): Promise<string | null> {
     return this.files.get(path.value) ?? null;
@@ -41,6 +42,13 @@ export class InMemoryFileSystem implements FileSystem {
 
   async append(path: AbsolutePath, content: string): Promise<void> {
     this.files.set(path.value, `${this.files.get(path.value) ?? ''}${content}`);
+  }
+
+  async move(source: AbsolutePath, destination: AbsolutePath): Promise<void> {
+    const content = this.files.get(source.value);
+    if (content === undefined) throw new Error(`Missing source: ${source.value}`);
+    await this.write(destination, content);
+    this.files.delete(source.value);
   }
 
   async exists(path: AbsolutePath): Promise<boolean> {
@@ -60,6 +68,12 @@ export class InMemoryFileSystem implements FileSystem {
     this.directories.add(path.value);
   }
 
+  async makeTemporaryDirectory(parent: AbsolutePath, prefix: string): Promise<AbsolutePath> {
+    const path = parent.join(`${prefix}${++this.temporarySequence}`);
+    this.directories.add(path.value);
+    return path;
+  }
+
   async remove(path: AbsolutePath): Promise<void> {
     this.files.delete(path.value);
     this.directories.delete(path.value);
@@ -69,9 +83,11 @@ export class InMemoryFileSystem implements FileSystem {
   }
 
   async list(root: AbsolutePath, _options?: ListOptions): Promise<readonly AbsolutePath[]> {
-    return [...this.files.keys()]
+    const found = [...this.files.keys()]
       .filter((key) => key.startsWith(`${root.value}/`))
-      .map((key) => AbsolutePath.of(key));
+      .map((key) => AbsolutePath.of(key))
+      .filter((path) => _options?.includeFile?.(path) !== false);
+    return _options?.maxEntries === undefined ? found : found.slice(0, _options.maxEntries);
   }
 
   realPath(path: AbsolutePath): AbsolutePath {
@@ -159,6 +175,10 @@ export class InMemoryDecisions implements DecisionStore {
     this.decisions.set(decision.key, decision);
   }
 
+  async recordMany(decisions: readonly Decision[]): Promise<void> {
+    for (const decision of decisions) this.decisions.set(decision.key, decision);
+  }
+
   async all(): Promise<readonly Decision[]> {
     return [...this.decisions.values()];
   }
@@ -171,9 +191,10 @@ export class FakeEnvironment implements Environment {
     readonly platform: Platform = 'darwin',
     readonly tempDir: AbsolutePath = AbsolutePath.of('/tmp'),
     readonly variables: Readonly<Record<string, string>> = {},
+    readonly identityHome: AbsolutePath = home,
   ) {}
 
   toolchainRoots(): readonly AbsolutePath[] {
-    return [this.home.join('.nvm')];
+    return [this.identityHome.join('.nvm')];
   }
 }

@@ -86,10 +86,24 @@ describe('family P — persistence outside the repository', () => {
     expect(ids(change('~/.npmrc', 'save-exact=true'))).not.toContain('AG-P007');
   });
 
-  it('AG-P008 reports agent settings changing outside agent-guard', () => {
+  it('AG-P008 reports agent settings changing outside agentkeeper', () => {
     expect(ids(change('~/.claude/settings.json', '{"hooks":{"SessionStart":[]}}'))).toContain(
       'AG-P008',
     );
+  });
+
+  it('AG-P009 reports protected agentkeeper configuration drift', () => {
+    expect(ids(change('~/.agentkeeper/config.json', '{"sandbox":{"enabled":false}}'))).toContain(
+      'AG-P009',
+    );
+    expect(ids(change('~/.agentkeeper/shims/claude', '#!/bin/sh\nexec claude "$@"'))).toContain(
+      'AG-P009',
+    );
+  });
+
+  it('does not classify mutable daemon evidence as protected configuration drift', () => {
+    expect(ids(change('~/.agentkeeper/audit.log', '{}'))).not.toContain('AG-P009');
+    expect(ids(change('~/.agentkeeper/persistence-pending.json', '{}'))).not.toContain('AG-P009');
   });
 
   it('ignores an unrelated file', () => {

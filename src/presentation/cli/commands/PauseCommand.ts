@@ -1,13 +1,14 @@
 import { Container } from '../../../composition/Container.js';
-import { parseDuration } from './LogCommand.js';
 import type { Command } from '../Command.js';
 
+const MAX_PAUSE_MILLISECONDS = 24 * 60 * 60_000;
+
 /**
- * `agent-guard pause <duration>` / `resume` (spec §10.2).
+ * `agentkeeper pause <duration>` / `resume` (spec §10.2).
  *
- * Pauses the *watching*, never the isolation. Layer 1 is a property of how the
- * process was started and cannot be suspended by a later command — which is
- * exactly why an injected "pause the guard" instruction buys nothing.
+ * Pauses desktop notifications, never comparison, audit, pending incident
+ * capture, or isolation. An injected "pause the guard" instruction therefore
+ * cannot convert persistence drift into trusted state.
  */
 export class PauseCommand implements Command {
   readonly name = 'pause';
@@ -20,14 +21,22 @@ export class PauseCommand implements Command {
 
     if (args[0] === '--resume' || args[0] === 'resume') {
       await container.files.remove(path);
+      await container.audit.append({
+        at: container.clock.now(),
+        event: 'pause.resumed',
+        details: {},
+      });
       process.stdout.write('Resumed.\n');
       return 0;
     }
 
     const raw = args[0] ?? '1h';
-    const until = new Date(
-      container.clock.now().getTime() + (raw === 'today' ? 8 * 3600_000 : parseDuration(raw)),
-    );
+    const duration = parsePauseDuration(raw);
+    if (duration === null) {
+      container.logger.error('pause duration must be between 1 minute and 24 hours');
+      return 2;
+    }
+    const until = new Date(container.clock.now().getTime() + duration);
 
     await container.files.write(path, `${JSON.stringify({ until: until.toISOString() })}\n`);
     await container.audit.append({
@@ -42,4 +51,16 @@ export class PauseCommand implements Command {
     );
     return 0;
   }
+}
+
+export function parsePauseDuration(raw: string): number | null {
+  if (raw === 'today') return 8 * 60 * 60_000;
+  const match = /^(\d+)([mhd])$/.exec(raw.trim());
+  if (match === null) return null;
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount) || amount < 1) return null;
+  const multiplier =
+    match[2] === 'm' ? 60_000 : match[2] === 'h' ? 60 * 60_000 : 24 * 60 * 60_000;
+  const milliseconds = amount * multiplier;
+  return milliseconds <= MAX_PAUSE_MILLISECONDS ? milliseconds : null;
 }

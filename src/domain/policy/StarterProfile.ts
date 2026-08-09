@@ -39,7 +39,17 @@ export class StarterProfile {
       spec.description,
       Object.freeze([...spec.reads]),
       Object.freeze([...spec.writes]),
-      Object.freeze(spec.network.map((raw) => parseNetwork(raw))),
+      Object.freeze(
+        spec.network.map((raw) => {
+          try {
+            return parseNetwork(raw);
+          } catch (error) {
+            throw new Error(
+              `Invalid network rule ${JSON.stringify(raw)}: ${(error as Error).message}`,
+            );
+          }
+        }),
+      ),
     );
   }
 
@@ -54,9 +64,17 @@ export class StarterProfile {
 
 function parseNetwork(raw: string): NetworkRule {
   if (raw === 'loopback') return NetworkRule.loopback();
+  // Legacy v1 syntax remains parseable so an old config produces a precise
+  // fail-closed broker error instead of being silently reinterpreted.
   const [protocol, port] = raw.split(':');
   const parsed = port === '*' ? '*' : Number(port);
   if (protocol === 'tcp') return NetworkRule.tcp(parsed);
   if (protocol === 'udp') return NetworkRule.udp(parsed);
+  const separator = raw.lastIndexOf(':');
+  if (separator > 0) {
+    const host = raw.slice(0, separator);
+    const destinationPort = Number(raw.slice(separator + 1));
+    return NetworkRule.destination(host, destinationPort);
+  }
   throw new Error(`Unknown network rule: ${JSON.stringify(raw)}`);
 }

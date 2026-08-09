@@ -56,6 +56,31 @@ describe('ResourceRef', () => {
 });
 
 describe('NetworkRule', () => {
+  it('normalises an exact destination without widening it', () => {
+    const rule = NetworkRule.destination('API.OpenAI.com.', 443);
+    expect(rule.host).toBe('api.openai.com');
+    expect(rule.port).toBe(443);
+    expect(rule.matches('API.OPENAI.COM.', 443)).toBe(true);
+    expect(rule.matches('evil-openai.com', 443)).toBe(false);
+    expect(rule.matches('api.openai.com', 80)).toBe(false);
+  });
+
+  it('requires an explicit, label-boundary wildcard', () => {
+    const rule = NetworkRule.destination('*.anthropic.com', 443);
+    expect(rule.matches('api.anthropic.com', 443)).toBe(true);
+    expect(rule.matches('deep.api.anthropic.com', 443)).toBe(true);
+    expect(rule.matches('anthropic.com', 443)).toBe(false);
+    expect(rule.matches('evilanthropic.com', 443)).toBe(false);
+    expect(() => NetworkRule.destination('*anthropic.com', 443)).toThrow(/wildcard/i);
+  });
+
+  it('rejects authority syntax and ambiguous hostnames', () => {
+    for (const host of ['', '.', 'https://api.openai.com', 'api.openai.com/path', 'user@host',
+      '*.com', 'exa mple.com', '127.0.0.1']) {
+      expect(() => NetworkRule.destination(host, 443), host).toThrow();
+    }
+  });
+
   it('describes outbound tcp on a port', () => {
     const rule = NetworkRule.tcp(443);
     expect(rule.protocol).toBe('tcp');
@@ -67,12 +92,37 @@ describe('NetworkRule', () => {
     const rule = NetworkRule.loopback();
     expect(rule.host).toBe('loopback');
     expect(rule.port).toBe('*');
+    expect(rule.allowsLoopback).toBe(true);
+    expect(rule.isExplicitDestination).toBe(false);
+    expect(rule.matches('localhost', 3000)).toBe(true);
+    expect(rule.matches('api.localhost.', 4317)).toBe(true);
+    expect(rule.matches('127.0.0.1', 3000)).toBe(false);
+  });
+
+  it('fails closed when a candidate or configured hostname is malformed', () => {
+    const exact = NetworkRule.destination('api.openai.com', 443);
+    expect(exact.isExplicitDestination).toBe(true);
+    expect(exact.matches('https://api.openai.com', 443)).toBe(false);
+    expect(NetworkRule.udp(53).matches('anything.example', 53)).toBe(false);
+    expect(NetworkRule.tcp(443).matches('anything.example', 443)).toBe(true);
+    expect(NetworkRule.tcp(443).matches('anything.example', 80)).toBe(false);
+
+    for (const host of [
+      'münich.example',
+      `${'a'.repeat(64)}.example`,
+      `${'a'.repeat(250)}.com`,
+      '-edge.example',
+      'edge-.example',
+    ]) {
+      expect(() => NetworkRule.destination(host, 443), host).toThrow();
+    }
   });
 
   it('rejects an out-of-range port', () => {
     expect(() => NetworkRule.tcp(0)).toThrow(/port/i);
     expect(() => NetworkRule.tcp(70_000)).toThrow(/port/i);
     expect(() => NetworkRule.tcp(1.5)).toThrow(/port/i);
+    expect(NetworkRule.tcp('*').port).toBe('*');
   });
 
   it('compares by value', () => {
@@ -84,5 +134,8 @@ describe('NetworkRule', () => {
     expect(NetworkRule.tcp(443).toString()).toBe('tcp://*:443');
     expect(NetworkRule.udp('*').toString()).toBe('udp://*:*');
     expect(NetworkRule.loopback().toString()).toBe('ip://localhost:*');
+    expect(NetworkRule.destination('api.openai.com', 443).toString()).toBe(
+      'tcp://api.openai.com:443',
+    );
   });
 });

@@ -43,12 +43,21 @@ export class SeatbeltRunner implements SandboxRunner {
     }
   }
 
-  /** Seatbelt expresses every rule this policy can produce. */
-  unenforceable(): readonly string[] {
-    return [];
+  unenforceable(policy: SandboxPolicy): readonly string[] {
+    if (policy.network.length === 0) return [];
+    if (
+      policy.networkEnforcement.kind === 'brokered' &&
+      policy.networkEnforcement.transport.kind === 'tcp-loopback'
+    ) {
+      return [];
+    }
+    return [
+      'Seatbelt can enforce only the launcher-owned loopback destination broker; direct ' +
+        'hostname/port egress remains closed.',
+    ];
   }
 
-  /** Exposed for `agent-guard status --explain` and for the sandbox test suite. */
+  /** Exposed for `agentkeeper status --explain` and for the sandbox test suite. */
   compile(policy: SandboxPolicy, context: PathContext): string {
     return this.compiler.compile(policy, context);
   }
@@ -58,7 +67,9 @@ export class SeatbeltRunner implements SandboxRunner {
     context: PathContext,
     command: SandboxCommand,
   ): Promise<SandboxRunResult> {
-    const directory = await mkdtemp(join(tmpdir(), 'agent-guard-'));
+    const gaps = this.unenforceable(policy);
+    if (gaps.length > 0) throw new Error(`Refusing an unenforceable Seatbelt policy: ${gaps.join(' ')}`);
+    const directory = await mkdtemp(join(tmpdir(), 'agentkeeper-'));
     const profilePath = join(directory, 'policy.sb');
     await writeFile(profilePath, this.compiler.compile(policy, context), { mode: 0o600 });
 

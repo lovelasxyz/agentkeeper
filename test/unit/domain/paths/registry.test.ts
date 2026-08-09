@@ -6,10 +6,17 @@ import type { PathContext } from '../../../../src/domain/paths/PathContext.js';
 
 const HOME = AbsolutePath.of('/Users/dev');
 const WORKSPACE = AbsolutePath.of('/Users/dev/projects/app');
+const WINDOWS_HOME = AbsolutePath.of(String.raw`C:\Users\Dev`);
+const WINDOWS_WORKSPACE = AbsolutePath.of(String.raw`C:\Users\Dev\projects\app`);
 const ctx = (platform: 'darwin' | 'linux' | 'win32' = 'darwin'): PathContext => ({
   home: HOME,
   workspace: WORKSPACE,
   platform,
+});
+const windowsCtx = (): PathContext => ({
+  home: WINDOWS_HOME,
+  workspace: WINDOWS_WORKSPACE,
+  platform: 'win32',
 });
 
 const registry = SensitivePathRegistry.default();
@@ -127,6 +134,60 @@ describe('sensitive path registry (spec §6.4)', () => {
     });
   });
 
+  describe('Windows home-relative coverage', () => {
+    it.each([
+      ['~/.ssh/id_ed25519', 'credential', 'ssh-keys'],
+      [
+        '~/AppData/Local/Google/Chrome/User Data/Default/Cookies',
+        'credential',
+        'chrome-profile-windows',
+      ],
+      [
+        '~/AppData/Local/Microsoft/Edge/User Data/Default/Cookies',
+        'credential',
+        'edge-profile-windows',
+      ],
+      [
+        '~/AppData/Roaming/Mozilla/Firefox/Profiles/default/logins.json',
+        'credential',
+        'firefox-profile-windows',
+      ],
+      [
+        '~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1',
+        'persistence',
+        'powershell-core-profile',
+      ],
+      [
+        '~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1',
+        'persistence',
+        'windows-powershell-profile',
+      ],
+      [
+        '~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/evil.cmd',
+        'persistence',
+        'windows-startup-folder',
+      ],
+      ['~/.agentkeeper/allowlist.json', 'persistence', 'agentkeeper-state'],
+    ] as const)('classifies %s as %s', (raw, category, id) => {
+      const path = AbsolutePath.fromUserPath(raw, WINDOWS_HOME);
+      const matches = registry.matching(path, windowsCtx());
+      expect(matches.map((entry) => entry.id), `${raw} is not covered`).toContain(id);
+      expect(matches.map((entry) => entry.category)).toContain(category);
+    });
+
+    it('matches Windows home-relative paths case-insensitively', () => {
+      const key = AbsolutePath.of(String.raw`c:\USERS\DEV\.SSH\ID_RSA`);
+      expect(registry.matching(key, windowsCtx()).map((entry) => entry.id)).toContain('ssh-keys');
+    });
+
+    it('does not apply Windows-only browser paths on POSIX', () => {
+      const chrome = AbsolutePath.of(
+        '/Users/dev/AppData/Local/Google/Chrome/User Data/Default/Cookies',
+      );
+      expect(registry.matching(chrome, ctx('darwin'))).toEqual([]);
+    });
+  });
+
   describe('false positives on a normal workspace', () => {
     it.each([
       '/Users/dev/projects/app/src/index.ts',
@@ -167,5 +228,7 @@ describe('sensitive path registry (spec §6.4)', () => {
     expect(ids).toContain('fish-config');
     expect(ids).toContain('systemd-user-units');
     expect(ids).toContain('launch-agents');
+    expect(ids).toContain('powershell-core-profile');
+    expect(ids).toContain('windows-powershell-profile');
   });
 });

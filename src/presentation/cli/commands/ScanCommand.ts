@@ -4,7 +4,7 @@ import { MESSAGES, Palette, renderFinding } from '../../messages/render.js';
 import { Flags, type Command } from '../Command.js';
 
 /**
- * `agent-guard scan [path]` — layer 2 on demand (spec §10.2).
+ * `agentkeeper scan [path]` — layer 2 on demand (spec §10.2).
  *
  * Also the body of the git hook, which is why `--quiet` exists: after a
  * checkout the user wants silence unless something is wrong.
@@ -17,16 +17,27 @@ export class ScanCommand implements Command {
   async execute(args: readonly string[]): Promise<number> {
     const flags = Flags.parse(args);
     const quiet = flags.has('quiet');
-    const container = new Container({ quiet });
+    const json = flags.has('json');
+    const source = flags.value('source') ?? 'cli';
+    const interactive = shouldReviewInteractively({ quiet, json, source });
+    const container = new Container({ quiet: quiet || json, interactive });
 
     const workspace = container.files.realPath(
-      resolveTarget(flags.positional[0], container.environment.cwd, container.environment.home),
+      resolveTarget(
+        flags.positional[0],
+        container.environment.cwd,
+        container.environment.identityHome,
+      ),
     );
 
     const useCase = await container.scanWorkspace();
-    const { report, filesInspected } = await useCase.execute(workspace);
+    const scanned = await useCase.execute(workspace);
+    const report = interactive
+      ? (await (await container.reviewFindings()).execute(scanned.report)).report
+      : scanned.report;
+    const { filesInspected } = scanned;
 
-    if (flags.has('json')) {
+    if (json) {
       process.stdout.write(
         `${JSON.stringify(
           { workspace: workspace.value, filesInspected, findings: report.findings },
@@ -59,7 +70,7 @@ export class ScanCommand implements Command {
       event: 'scan.completed',
       details: {
         workspace: workspace.value,
-        source: flags.value('source') ?? 'cli',
+        source,
         findings: report.findings.length,
         worst: report.worstSeverity.name,
       },
@@ -67,6 +78,14 @@ export class ScanCommand implements Command {
 
     return report.blocking().length > 0 ? 2 : 0;
   }
+}
+
+export function shouldReviewInteractively(input: {
+  readonly quiet: boolean;
+  readonly json: boolean;
+  readonly source: string;
+}): boolean {
+  return !input.quiet && !input.json && input.source !== 'git' && !input.source.startsWith('git-');
 }
 
 /** Accepts what a shell would hand over: nothing, `.`, `~/x`, `/abs`, `sub/dir`. */

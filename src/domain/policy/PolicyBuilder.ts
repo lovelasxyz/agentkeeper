@@ -17,7 +17,10 @@ export interface PolicyInput {
   readonly workspaceId: WorkspaceId;
   /** Node installs and version managers — readable, never writable. */
   readonly toolchainRoots: readonly AbsolutePath[];
-  /** agent-guard's own state. Never writable: that is AG-B005 made structural. */
+  /**
+   * agentkeeper's own state root. Only the two non-secret hook inputs are
+   * readable; grants, audit records and installer backups stay private.
+   */
   readonly stateDir: AbsolutePath;
   /** The agent's own state (session history, caches) — read and write. */
   readonly agentStateDirs: readonly AbsolutePath[];
@@ -49,7 +52,7 @@ export class UnsafeWorkspaceError extends Error {
     super(
       `Refusing to isolate ${workspace.value}: it contains ${swallowed.value} (${sourceId}). ` +
         'The workspace is granted in full, so this would hand over the very files ' +
-        'agent-guard exists to protect. Run the agent from a project directory instead.',
+        'agentkeeper exists to protect. Run the agent from a project directory instead.',
     );
     this.name = 'UnsafeWorkspaceError';
   }
@@ -78,8 +81,12 @@ export class PolicyBuilder {
       ...input.toolchainRoots.map((path) => ResourceRef.subtree(path)),
       ...input.agentStateDirs.map((path) => ResourceRef.subtree(path)),
       ...input.tempDirs.map((path) => ResourceRef.subtree(path)),
-      // Readable so the agent can be told what it is allowed to do; never writable.
-      ResourceRef.subtree(input.stateDir),
+      // The hook runs inside the same process tree and needs these two inputs.
+      // Opening the directory would also expose allowlist.json, audit.log and
+      // byte-for-byte installer backups — a ready-made inventory of the data
+      // this product exists to protect.
+      ResourceRef.file(input.stateDir.join('config.json')),
+      ResourceRef.file(input.stateDir.join('decisions.json')),
     ];
     const writes: ResourceRef[] = [
       ResourceRef.subtree(context.workspace),
@@ -90,7 +97,8 @@ export class PolicyBuilder {
     this.collectProfile(input, reads, writes, rejected);
 
     const overrides: PolicyOverride[] = [];
-    this.collectGrants(input, reads, writes, overrides, rejected);
+    const runtimeRefs: ResourceRef[] = [];
+    this.collectGrants(input, reads, writes, overrides, runtimeRefs, rejected);
 
     return {
       policy: new SandboxPolicy({
@@ -100,6 +108,7 @@ export class PolicyBuilder {
         denies: this.denyRules(context),
         overrides,
         network: input.profile.network,
+        runtimeRefs,
       }),
       rejected,
     };
@@ -177,6 +186,7 @@ export class PolicyBuilder {
     reads: ResourceRef[],
     writes: ResourceRef[],
     overrides: PolicyOverride[],
+    runtimeRefs: ResourceRef[],
     rejected: RejectedGrant[],
   ): void {
     const { context } = input;
@@ -187,6 +197,7 @@ export class PolicyBuilder {
       const target = grant.access === 'read' ? reads : writes;
       if (this.tiers.canGrantAtRuntime(grant.resource, grant.access, context)) {
         target.push(grant.resource);
+        runtimeRefs.push(grant.resource);
         continue;
       }
 
@@ -199,6 +210,7 @@ export class PolicyBuilder {
           reason: grant.reason,
         });
         target.push(grant.resource);
+        runtimeRefs.push(grant.resource);
         continue;
       }
 

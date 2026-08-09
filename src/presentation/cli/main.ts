@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { CommandRouter } from './CommandRouter.js';
+import { describeFailure } from '../messages/render.js';
 
 /**
  * Entry point. Deliberately thin: everything testable lives one level down, and
@@ -13,6 +14,6 @@ router
     process.exitCode = code;
   })
   .catch((error: unknown) => {
-    process.stderr.write(`agent-guard: ${(error as Error).message}\n`);
+    process.stderr.write(`agentkeeper: ${describeFailure(error)}\n`);
     process.exitCode = 1;
   });

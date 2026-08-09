@@ -14,5 +14,22 @@
     "dir:~/.terraform.d/plugin-cache",
     "dir:~/.cache/helm"
   ],
-  "network": ["tcp:443", "udp:53", "loopback"]
+  "network": [
+    "*.anthropic.com:443",
+    "claude.ai:443",
+    "*.claude.ai:443",
+    "*.openai.com:443",
+    "chatgpt.com:443",
+    "*.chatgpt.com:443",
+    "*.googleapis.com:443",
+    "accounts.google.com:443",
+    "openrouter.ai:443",
+    "github.com:443",
+    "*.github.com:443",
+    "*.githubusercontent.com:443",
+    "registry.npmjs.org:443",
+    "registry.terraform.io:443",
+    "releases.hashicorp.com:443",
+    "charts.helm.sh:443"
+  ]
 }

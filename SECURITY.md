@@ -16,12 +16,12 @@ Anything that breaks one of these properties:
 
 1. **Tier 2 is unreachable at runtime.** Any path that lets a prompt, a tool
    call or a configuration file obtain read or write access to a tier 2
-   resource without a human editing `~/.agent-guard/allowlist.json`.
-2. **The sandbox holds.** Any way for a command started by `agent-guard run` to
+   resource without a human editing `~/.agentkeeper/allowlist.json`.
+2. **The sandbox holds.** Any way for a command started by `agentkeeper run` to
    read or write outside its policy.
-3. **Self-protection.** Any way for the agent to modify `~/.agent-guard`, its
+3. **Self-protection.** Any way for the agent to modify `~/.agentkeeper`, its
    own hook registration, or `core.hooksPath`.
-4. **Fail-closed on isolation.** Any path where `agent-guard run` starts a
+4. **Fail-closed on isolation.** Any path where `agentkeeper run` starts a
    command unconfined without the user having explicitly configured
    `sandbox.onUnavailable: "warn"`.
 5. **The audit log stays clean.** Any case where file contents reach

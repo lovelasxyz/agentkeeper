@@ -36,7 +36,7 @@ const input = (overrides: Partial<PolicyInput> = {}): PolicyInput => ({
   context: CTX,
   workspaceId: WORKSPACE_ID,
   toolchainRoots: [at('~/.nvm')],
-  stateDir: at('~/.agent-guard'),
+  stateDir: at('~/.agentkeeper'),
   agentStateDirs: [at('~/.claude')],
   tempDirs: [AbsolutePath.of('/tmp')],
   ...overrides,
@@ -92,7 +92,22 @@ describe('PolicyBuilder', () => {
 
     it('denies writing to its own state directory, so grants cannot be self-issued', () => {
       const { policy } = builder.build(input());
-      expect(policy.allows('write', at('~/.agent-guard/allowlist.json'), CTX)).toBe(false);
+      expect(policy.allows('write', at('~/.agentkeeper/allowlist.json'), CTX)).toBe(false);
+    });
+
+    it('keeps private control-plane state unreadable to the agent process tree', () => {
+      const { policy } = builder.build(input());
+      expect(policy.allows('read', at('~/.agentkeeper/allowlist.json'), CTX)).toBe(false);
+      expect(policy.allows('read', at('~/.agentkeeper/audit.log'), CTX)).toBe(false);
+      expect(policy.allows('read', at('~/.agentkeeper/backups/zshrc.original'), CTX)).toBe(false);
+    });
+
+    it('opens only the minimal read-only state needed by an in-sandbox hook', () => {
+      const { policy } = builder.build(input());
+      expect(policy.allows('read', at('~/.agentkeeper/config.json'), CTX)).toBe(true);
+      expect(policy.allows('read', at('~/.agentkeeper/decisions.json'), CTX)).toBe(true);
+      expect(policy.allows('write', at('~/.agentkeeper/config.json'), CTX)).toBe(false);
+      expect(policy.allows('write', at('~/.agentkeeper/decisions.json'), CTX)).toBe(false);
     });
   });
 

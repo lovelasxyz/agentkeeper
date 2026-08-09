@@ -108,8 +108,8 @@ export function renderDiff(change: PlannedChange, palette: Palette): string {
 
 export const MESSAGES = {
   noMechanism:
-    'No isolation mechanism is available on this platform. agent-guard is NOT protecting you ' +
-    'beyond its rule layer — see `agent-guard status`.',
+    'No isolation mechanism is available on this platform. agentkeeper is NOT protecting you ' +
+    'beyond its rule layer — see `agentkeeper status`.',
 
   grantTakesEffectNextRun:
     'Granted. It takes effect on the next run: both sandbox mechanisms fix the profile when the ' +
@@ -117,12 +117,36 @@ export const MESSAGES = {
 
   tierTwoRefused:
     'This category is not configurable while the agent is running. Edit ' +
-    '~/.agent-guard/allowlist.json in your editor if you genuinely need it.',
+    '~/.agentkeeper/allowlist.json in your editor if you genuinely need it.',
 
   scanClean: 'Nothing to report.',
 
   shellIrony:
     'Note: writing to your shell startup file is the same technique this tool watches for ' +
     '(vector V9). That is why it is one line pointing at a separate file, shown above in full, ' +
-    'and removed exactly by `agent-guard uninstall`.',
+    'and removed exactly by `agentkeeper uninstall`.',
 } as const;
+
+/**
+ * Flattens a failure into something a person can act on.
+ *
+ * An installer that reports only "rollback was incomplete" tells the user
+ * their machine is in an unknown state and nothing about which part of it.
+ * Aggregated failures and `cause` chains are unwrapped so the actual reason —
+ * a refused service registration, an unwritable path — reaches the terminal.
+ */
+export function describeFailure(error: unknown, depth = 0): string {
+  if (depth > 4) return '…';
+  if (!(error instanceof Error)) return String(error);
+
+  const nested: string[] = [];
+  if (error instanceof AggregateError) {
+    for (const inner of error.errors) nested.push(describeFailure(inner, depth + 1));
+  }
+  if (error.cause !== undefined) nested.push(describeFailure(error.cause, depth + 1));
+
+  const indent = '  '.repeat(depth + 1);
+  return nested.length === 0
+    ? error.message
+    : `${error.message}\n${nested.map((line) => `${indent}- ${line}`).join('\n')}`;
+}

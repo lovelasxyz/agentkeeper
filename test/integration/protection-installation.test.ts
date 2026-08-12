@@ -257,22 +257,23 @@ describe('ProtectionInstallationPlanner', () => {
     expect(git.hooksPath).toBe('/tmp/foreign-hooks');
   });
 
-  it('rolls back files and git config if first service activation fails', async () => {
+  it('installs degraded rather than not at all when the watcher cannot be activated', async () => {
+    // Spec §24: a host with no usable user-level service manager still gets
+    // the interception. The watcher observes; it is never the boundary, so
+    // refusing to install because it will not start removes real protection
+    // in exchange for none.
     const { files, service, git, planner, executor } = await fixture();
-    const profileBefore = await files.read(PROFILE);
-    const settingsBefore = await files.read(SETTINGS);
     service.failNextDesired = 'active';
 
-    await expect(executor.execute(await planner.plan('activate'))).rejects.toThrow(
-      'simulated service activation failure',
-    );
+    const result = await executor.execute(await planner.plan('activate'));
 
-    expect(git.hooksPath).toBe('/work/.husky');
+    expect(result.degraded).toHaveLength(1);
+    expect(result.degraded[0]).toMatch(/watcher could not be activated/i);
     expect(service.status.registered).toBe(false);
-    expect(await files.read(STATE.join('installation/manifest.json'))).toBeNull();
-    expect(await files.read(MANAGED_HOOKS.join('post-checkout'))).toBeNull();
-    expect(await files.read(PROFILE)).toBe(profileBefore);
-    expect(await files.read(SETTINGS)).toBe(settingsBefore);
+    // Everything that does confine the agent is still in place.
+    expect(await files.read(STATE.join('installation/manifest.json'))).not.toBeNull();
+    expect(await files.read(MANAGED_HOOKS.join('post-checkout'))).not.toBeNull();
+    expect(git.hooksPath).toBe(MANAGED_HOOKS.value);
   });
 
   it('refuses when external state changes between planning and execution', async () => {
@@ -325,9 +326,11 @@ describe('ProtectionInstallationPlanner', () => {
   });
 
   it('reports an incomplete rollback while still restoring managed files', async () => {
-    const { files, service, git, planner, executor } = await fixture();
+    const { files, git, planner, executor } = await fixture();
     const plan = await planner.plan('activate');
-    service.failNextDesired = 'active';
+    // Git hook routing is part of the boundary, so its failure still aborts
+    // the whole activation — unlike the watcher, which only degrades it.
+    git.failNextWrite = true;
     git.failForPath = '/work/.husky';
 
     await expect(executor.execute(plan)).rejects.toThrow(
@@ -336,7 +339,7 @@ describe('ProtectionInstallationPlanner', () => {
     expect(await files.read(STATE.join('installation/manifest.json'))).toBeNull();
   });
 
-  it('reports a filesystem rollback failure together with the triggering service failure', async () => {
+  it('reports a filesystem rollback failure together with the triggering failure', async () => {
     const { service, git, planner } = await fixture();
     const plan = await planner.plan('activate');
     let fileExecutions = 0;
@@ -347,7 +350,7 @@ describe('ProtectionInstallationPlanner', () => {
         return { applied: filePlan.changes.length, dryRun: false };
       },
     };
-    service.failNextDesired = 'active';
+    git.failNextWrite = true;
     const executor = new TransactionalProtectionInstallationExecutor(
       rollbackFailingFiles,
       service,
@@ -358,7 +361,7 @@ describe('ProtectionInstallationPlanner', () => {
       name: 'AggregateError',
       message: 'Protection installation failed and could not be rolled back completely',
       errors: [
-        expect.objectContaining({ message: 'simulated service activation failure' }),
+        expect.objectContaining({ message: 'simulated git config failure' }),
         expect.objectContaining({ message: 'simulated filesystem rollback failure' }),
       ],
     });

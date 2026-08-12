@@ -172,6 +172,10 @@ export class InstallationCommand implements Command {
       `${palette.green('✓')} ${this.operation} complete ` +
         `(${result.filesApplied} file, ${result.externalApplied} system change(s)).`,
     );
+    for (const reason of result.degraded) {
+      write(`${palette.yellow('!')} Degraded: ${reason}`);
+      write('  Interception is installed; run `agentkeeper doctor` for the effective status.');
+    }
     if (this.operation === 'activate') {
       write('Open a new terminal once; after that use your agent command normally.');
       write('Verify the effective boundary with `agentkeeper doctor`.');

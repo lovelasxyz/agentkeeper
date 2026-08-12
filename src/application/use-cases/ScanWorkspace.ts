@@ -10,31 +10,39 @@ import { mapWithConcurrency } from '../services/BoundedConcurrency.js';
 const SCAN_IO_CONCURRENCY = 8;
 const MAX_SCANNED_ARTIFACT_BYTES = 512 * 1024;
 
-/** Only these are ever read: a scan is cheap because it looks at very little. */
+/**
+ * Only these are ever read: a scan is cheap because it looks at very little.
+ *
+ * Case-insensitive, and that is a security property rather than tidiness.
+ * Windows delivers paths already lower-cased, so a case-sensitive `CLAUDE.md`
+ * matched nothing there and the instruction-injection family was unreachable
+ * on the whole platform. Reading a few extra candidates costs nothing; missing
+ * the one that carries the payload costs everything.
+ */
 const INTERESTING = [
-  /^\.claude\/settings(\.local)?\.json$/,
-  /^\.claude\/.*\.json$/,
-  /^\.vscode\/(tasks|settings|mcp)\.json$/,
-  /^\.devcontainer\/.*devcontainer\.json$/,
-  /^\.git\/hooks\/[^.]+$/,
-  /^\.envrc$/,
-  /^\.env(\..+)?$/,
-  /^\.gemini\/.*$/,
-  /^\.(mcp|cursorrules|windsurfrules)$/,
-  /^\.mcp\.json$/,
-  /^\.cursor\/.*$/,
-  /^(CLAUDE|AGENTS|GEMINI)(\.local)?\.md$/,
-  /^\.github\/(workflows\/.+\.ya?ml|copilot-instructions\.md)$/,
+  /^\.claude\/settings(\.local)?\.json$/i,
+  /^\.claude\/.*\.json$/i,
+  /^\.vscode\/(tasks|settings|mcp)\.json$/i,
+  /^\.devcontainer\/.*devcontainer\.json$/i,
+  /^\.git\/hooks\/[^.]+$/i,
+  /^\.envrc$/i,
+  /^\.env(\..+)?$/i,
+  /^\.gemini\/.*$/i,
+  /^\.(mcp|cursorrules|windsurfrules)$/i,
+  /^\.mcp\.json$/i,
+  /^\.cursor\/.*$/i,
+  /^(CLAUDE|AGENTS|GEMINI)(\.local)?\.md$/i,
+  /^\.github\/(workflows\/.+\.ya?ml|copilot-instructions\.md)$/i,
 ];
 
 const INTERESTING_TREES = [
-  /^\.claude(?:\/|$)/,
-  /^\.vscode(?:\/|$)/,
-  /^\.devcontainer(?:\/|$)/,
-  /^\.git(?:\/hooks(?:\/|$)|$)/,
-  /^\.gemini(?:\/|$)/,
-  /^\.cursor(?:\/|$)/,
-  /^\.github(?:\/workflows(?:\/|$)|$)/,
+  /^\.claude(?:\/|$)/i,
+  /^\.vscode(?:\/|$)/i,
+  /^\.devcontainer(?:\/|$)/i,
+  /^\.git(?:\/hooks(?:\/|$)|$)/i,
+  /^\.gemini(?:\/|$)/i,
+  /^\.cursor(?:\/|$)/i,
+  /^\.github(?:\/workflows(?:\/|$)|$)/i,
 ];
 
 export interface ScanResult {

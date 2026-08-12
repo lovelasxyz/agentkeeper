@@ -276,7 +276,10 @@ describe('init and uninstall (spec §16)', () => {
 
   it('reports itself as active', () => {
     const status = cli(['status']);
-    expect(status.stdout).toMatch(/DEGRADED/);
+    // Linux with bubblewrap reaches PROTECTED; macOS reports the Seatbelt
+    // broad-read gap. Both are correct, so assert the canary rather than a
+    // level that depends on which backend the runner has.
+    expect(status.stdout).toMatch(/PROTECTED|DEGRADED/);
     expect(status.stdout).toMatch(/deny canary: passed/);
     // The login service registers in the real user domain, which a faked
     // identity home cannot reach, so health of the resident watcher is proven

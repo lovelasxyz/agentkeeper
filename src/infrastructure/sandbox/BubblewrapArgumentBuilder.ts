@@ -51,6 +51,11 @@ export class BubblewrapArgumentBuilder {
       if (anchor === null) continue;
       if (deny.exceptWithin?.contains(anchor) === true) continue;
       if (policy.overrides.some((override) => override.ref.covers(anchor))) continue;
+      // A tmpfs mount point has to be a directory, so shadowing a readable
+      // *file* makes bwrap mkdir over the bind it just created and abort the
+      // whole launch with ENOTDIR. It is also unnecessary: the file is bound
+      // read-only, which is exactly what refusing the write means.
+      if (deny.access === 'write' && this.isReadOnlyFile(policy, anchor)) continue;
       args.push('--tmpfs', anchor.value);
     }
 
@@ -62,6 +67,14 @@ export class BubblewrapArgumentBuilder {
 
     args.push('--chdir', command.cwd.value, '--', command.executable, ...command.args);
     return args;
+  }
+
+  /** Bound read-only as a single file, and never made writable elsewhere. */
+  private isReadOnlyFile(policy: SandboxPolicy, anchor: AbsolutePath): boolean {
+    const readable = policy.reads.some(
+      (ref) => ref.scope === 'file' && ref.path.equals(anchor),
+    );
+    return readable && !policy.writes.some((ref) => ref.covers(anchor));
   }
 
   private isCoveredBySystem(path: AbsolutePath): boolean {

@@ -79,6 +79,14 @@ export interface ProtectionHealth {
 export interface ProtectionInstallationExecutionResult {
   readonly filesApplied: number;
   readonly externalApplied: number;
+  /**
+   * Optional activation steps that were refused by the host and skipped.
+   *
+   * The resident watcher is an observer, never the boundary, so a machine
+   * without a usable user-level service manager still gets the interception it
+   * installed — degraded and named, rather than no protection at all.
+   */
+  readonly degraded: readonly string[];
 }
 
 export interface InstallationProcessResult {

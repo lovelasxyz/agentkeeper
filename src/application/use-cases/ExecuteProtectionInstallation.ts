@@ -62,17 +62,34 @@ export class TransactionalProtectionInstallationExecutor {
   ): Promise<ProtectionInstallationExecutionResult> {
     let fileResult: Awaited<ReturnType<InstallationExecutor['execute']>> | null = null;
     const attempted: SystemIntegrationTransition[] = [];
+    const degraded: string[] = [];
+    let applied = 0;
     try {
       fileResult = await this.files.execute(plan.filePlan);
       for (const transition of plan.externalChanges) {
         await this.verifyExternalPrecondition(transition);
+        // A host with no usable user-level service manager — a container, WSL
+        // without systemd, a locked-down workstation — must still end up with
+        // working interception. The watcher observes; it does not confine.
+        if (transition.kind === 'service') {
+          try {
+            attempted.push(transition);
+            await this.applyExternal(transition);
+            applied += 1;
+          } catch (error) {
+            attempted.pop();
+            await this.restoreQuietly(transition);
+            degraded.push(
+              `the resident watcher could not be activated: ${(error as Error).message}`,
+            );
+          }
+          continue;
+        }
         attempted.push(transition);
         await this.applyExternal(transition);
+        applied += 1;
       }
-      return {
-        filesApplied: fileResult.applied,
-        externalApplied: plan.externalChanges.length,
-      };
+      return { filesApplied: fileResult.applied, externalApplied: applied, degraded };
     } catch (error) {
       const rollbackErrors = await this.rollbackExternal(attempted);
       if (fileResult !== null && plan.filePlan.changes.length > 0) {
@@ -100,10 +117,20 @@ export class TransactionalProtectionInstallationExecutor {
       return {
         filesApplied: fileResult.applied,
         externalApplied: plan.externalChanges.length,
+        degraded: [],
       };
     } catch (error) {
       const rollbackErrors = await this.rollbackExternal(attempted);
       throwRollbackAware(error, rollbackErrors);
+    }
+  }
+
+  /** Best effort: the transition already failed, so its rollback may too. */
+  private async restoreQuietly(transition: ServiceTransition): Promise<void> {
+    try {
+      await this.services.restore(transition.registration, transition.before);
+    } catch {
+      // Nothing was activated, so there is nothing further to undo.
     }
   }
 

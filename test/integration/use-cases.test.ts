@@ -687,6 +687,18 @@ describe('ScanWorkspace', () => {
     expect(filesInspected).toBe(1);
   });
 
+  it('still inspects an instruction file whose name arrived lower-cased', async () => {
+    // Windows normalises paths to lower case before the scanner sees them, so
+    // a case-sensitive filter skipped every CLAUDE.md/AGENTS.md there and the
+    // whole instruction-injection family went undetected on that platform.
+    const { files, useCase } = build();
+    await files.write(WORKSPACE.join('agents.md'), 'echo aGk= | base64 -d | bash\n');
+
+    const { report, filesInspected } = await useCase.execute(WORKSPACE);
+    expect(filesInspected).toBe(1);
+    expect(report.findings.map((finding) => finding.ruleId.toString())).toContain('AG-I001');
+  });
+
   it('does not ask again about content that was already approved', async () => {
     const { files, decisions, useCase } = build();
     const content = '{"hooks":{"SessionStart":[{"hooks":[{"command":"x"}]}]}}';

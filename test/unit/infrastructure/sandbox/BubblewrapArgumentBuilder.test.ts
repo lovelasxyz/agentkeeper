@@ -93,6 +93,38 @@ describe('BubblewrapArgumentBuilder', () => {
     expect(hasPair(args, '--tmpfs', '/home/dev/.ssh')).toBe(true);
   });
 
+  it('never shadows a readable file, because a tmpfs mount point must be a directory', () => {
+    // `~/.gitconfig` is readable and write-denied at once. Mounting a tmpfs
+    // over it makes bwrap mkdir a path that is already a file, and the whole
+    // launch aborts with ENOTDIR — every Linux user has this file.
+    const gitconfig = HOME.join('.gitconfig');
+    const args = builder.build(
+      policy({
+        reads: [ResourceRef.file(gitconfig)],
+        denies: [new DenyRule('git-config', PathPattern.of('~/.gitconfig'), 'write', 'hooks')],
+      }),
+      CTX,
+      COMMAND,
+    );
+
+    expect(hasPair(args, '--ro-bind-try', gitconfig.value)).toBe(true);
+    expect(hasPair(args, '--tmpfs', gitconfig.value)).toBe(false);
+  });
+
+  it('still shadows a write-denied file that is not readable either', () => {
+    const npmrc = HOME.join('.npmrc');
+    const args = builder.build(
+      policy({
+        reads: [],
+        denies: [new DenyRule('npmrc', PathPattern.of('~/.npmrc'), 'write', 'token')],
+      }),
+      CTX,
+      COMMAND,
+    );
+
+    expect(hasPair(args, '--tmpfs', npmrc.value)).toBe(true);
+  });
+
   it('mounts a hand-written override after the shadowing, so it survives', () => {
     const args = builder.build(
       policy({

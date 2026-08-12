@@ -75,13 +75,17 @@ try {
   );
 
   // What any wrapper that spawns a sandboxed command pays before doing anything
-  // of its own: one interpreter start-up plus `sandbox-exec`.
-  const sandboxedNode = fastest(() =>
-    execFileSync('/usr/bin/sandbox-exec', ['-f', nullProfile, process.execPath, '-e', '0'], {
-      stdio: 'ignore',
-    }),
-  );
-  const spawnFloor = process.platform === 'darwin' ? bareNode + sandboxedNode : 2 * bareNode;
+  // of its own: one interpreter start-up plus the platform mechanism. Only
+  // macOS has `sandbox-exec`; measuring it elsewhere just crashes the run.
+  const spawnFloor =
+    process.platform === 'darwin'
+      ? bareNode +
+        fastest(() =>
+          execFileSync('/usr/bin/sandbox-exec', ['-f', nullProfile, process.execPath, '-e', '0'], {
+            stdio: 'ignore',
+          }),
+        )
+      : 2 * bareNode;
 
   const hook = fastest(() =>
     execFileSync(process.execPath, [BIN, 'hook', 'pretooluse'], {
@@ -109,7 +113,10 @@ try {
   process.stdout.write(
     `${JSON.stringify({
       bareNodeStartup: round(bareNode),
-      sandboxExecCost: round(sandboxedNode - bareNode),
+      // `spawnFloor` is one bare start-up plus one sandboxed one, so what the
+      // sandbox binary itself adds is the floor minus two bare start-ups.
+      // Zero where no such binary exists, which is the honest figure there.
+      sandboxExecCost: round(spawnFloor - 2 * bareNode),
       // Everything above one interpreter start-up: our modules, our I/O, our
       // policy build. Node's own start-up is charged to any hook that is not a
       // compiled binary and is reported separately rather than hidden.

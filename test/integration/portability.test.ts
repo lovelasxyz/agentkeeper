@@ -106,7 +106,10 @@ describe('build and CI portability', () => {
     expect(workflow).toMatch(/win32-arm64/);
     // Packing must not re-run prepack: a rebuild after the download would
     // decide the tarball contents from a different tree than the one verified.
-    expect(workflow).toMatch(/npm pack --dry-run --ignore-scripts/);
+    // The verifier owns that flag now, so assert it where it actually lives.
+    expect(readFileSync(join(repository, 'scripts/verify-tarball.mjs'), 'utf8')).toMatch(
+      /'--ignore-scripts'/,
+    );
   });
 
   it('proves the assembled tarball itself carries both Windows helpers', () => {
@@ -116,33 +119,36 @@ describe('build and CI portability', () => {
     }
   });
 
-  it('the tarball verifier rejects a listing without the native helpers', () => {
-    const verifier = join(repository, 'scripts/verify-tarball.mjs');
-    const listing = (files: readonly string[]): string =>
-      JSON.stringify([{ files: files.map((path) => ({ path })) }]);
+  it('reads a real archive rather than an npm output format', async () => {
+    // The previous verifier parsed `npm pack --json` and reported every
+    // artifact missing the day npm changed that undocumented shape. Reading
+    // the actual tarball is what the gate was always supposed to do.
+    // Computed specifier on purpose: the build scripts are plain ESM with no
+    // declarations, and a literal path would need a `.d.ts` that exists only
+    // to satisfy the type checker.
+    const verifier: {
+      listTarEntries: (gzipped: Buffer) => string[];
+      missingArtifacts: (entries: readonly string[]) => string[];
+    } = await import(new URL('../../scripts/verify-tarball.mjs', import.meta.url).href);
+    const { listTarEntries, missingArtifacts } = verifier;
 
-    expect(() =>
-      execFileSync(process.execPath, [verifier], {
-        input: listing(['dist/cli.js', 'dist/index.js']),
-        stdio: 'pipe',
-      }),
-    ).toThrow();
+    const root = mkdtempSync(join(tmpdir(), 'agentkeeper-tar-'));
+    temporaryRoots.push(root);
+    mkdirSync(join(root, 'package/dist/native/win32-x64'), { recursive: true });
+    writeFileSync(join(root, 'package/dist/native/win32-x64/agentkeeper-sandbox.exe'), 'MZ');
+    writeFileSync(join(root, 'package/README.md'), '# hi\n');
+    execFileSync('tar', ['-czf', join(root, 'sample.tgz'), '-C', root, 'package']);
 
-    const accepted = execFileSync(process.execPath, [verifier], {
-      input: listing([
-        'dist/cli.js',
-        'dist/index.js',
-        'dist/index.d.ts',
-        'dist/native/win32-x64/agentkeeper-sandbox.exe',
-        'dist/native/win32-arm64/agentkeeper-sandbox.exe',
-        'profiles/minimal.json',
-        'README.md',
-        'LICENSE',
-        'SECURITY.md',
-      ]),
-      stdio: 'pipe',
-    });
-    expect(accepted.toString()).toMatch(/tarball verification/);
+    const entries = listTarEntries(readFileSync(join(root, 'sample.tgz')) as Buffer);
+    expect(entries).toContain('package/README.md');
+    expect(entries).toContain('package/dist/native/win32-x64/agentkeeper-sandbox.exe');
+
+    // The `package/` prefix must not hide a required path, and a genuinely
+    // absent helper must still be reported.
+    const missing = missingArtifacts(entries);
+    expect(missing).not.toContain('README.md');
+    expect(missing).toContain('dist/native/win32-arm64/agentkeeper-sandbox.exe');
+    expect(missingArtifacts([])).toHaveLength(9);
   });
 
   it('keeps the compiler intermediate out of the packaged native directory', () => {

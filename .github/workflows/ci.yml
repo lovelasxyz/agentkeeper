@@ -148,7 +148,7 @@ jobs:
       # different tree than the one just verified. The verifier then reads the
       # archive listing itself rather than trusting the working tree.
       - name: Verify the assembled tarball
-        run: npm pack --dry-run --ignore-scripts --json | node scripts/verify-tarball.mjs
+        run: node scripts/verify-tarball.mjs
 
       - name: Refuse a postinstall script
         run: |

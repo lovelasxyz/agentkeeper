@@ -115,7 +115,7 @@ jobs:
       # working tree, and packed without re-running prepack so the downloaded
       # Windows helpers survive into the artifact that ships.
       - name: Verify the assembled tarball
-        run: npm pack --dry-run --ignore-scripts --json | node scripts/verify-tarball.mjs
+        run: node scripts/verify-tarball.mjs
       - name: Generate release SBOM
         run: npm sbom --sbom-format cyclonedx > agentkeeper.cdx.json
       - uses: actions/upload-artifact@v4

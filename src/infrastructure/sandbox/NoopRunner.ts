@@ -46,10 +46,21 @@ export class NoopRunner implements SandboxRunner {
         env: { ...command.env },
         stdio: 'inherit',
       });
-      child.once('error', reject);
-      child.once('exit', (code, signal) =>
-        resolve({ exitCode: code ?? (signal ? 128 : 1), signal: signal ?? null }),
-      );
+      const abort = (): void => {
+        child.kill('SIGKILL');
+      };
+      command.signal?.addEventListener('abort', abort, { once: true });
+      const detach = (): void => command.signal?.removeEventListener('abort', abort);
+      if (command.signal?.aborted === true) abort();
+
+      child.once('error', (error) => {
+        detach();
+        reject(error);
+      });
+      child.once('exit', (code, signal) => {
+        detach();
+        resolve({ exitCode: code ?? (signal ? 128 : 1), signal: signal ?? null });
+      });
     });
   }
 }

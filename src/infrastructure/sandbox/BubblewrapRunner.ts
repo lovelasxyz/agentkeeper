@@ -153,9 +153,17 @@ export class BubblewrapRunner implements SandboxRunner {
         process.on(signal, handler);
         return [signal, handler] as const;
       });
+      // `--die-with-parent` takes the namespace down with bwrap, so killing it
+      // is enough to reclaim the whole confined tree.
+      const abort = (): void => {
+        child.kill('SIGKILL');
+      };
+      command.signal?.addEventListener('abort', abort, { once: true });
       const detach = (): void => {
         for (const [signal, handler] of handlers) process.off(signal, handler);
+        command.signal?.removeEventListener('abort', abort);
       };
+      if (command.signal?.aborted === true) abort();
 
       child.once('error', (error) => {
         detach();

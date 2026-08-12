@@ -66,6 +66,8 @@ export interface WindowsSandboxInvocation {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string>>;
   readonly stdio: 'ignore' | 'inherit';
+  /** Ends the helper, and with it the Job Object that holds the sandbox. */
+  readonly signal?: AbortSignal;
   /**
    * Bound for a preflight only. A real agent session runs as long as the user
    * needs it, but a probe that never returns is worse than one that fails:
@@ -272,6 +274,7 @@ export class WindowsSandboxRunner implements SandboxRunner {
               TEMP: overlayHome.join('tmp').value,
             },
             stdio: 'inherit',
+            ...(command.signal === undefined ? {} : { signal: command.signal }),
           },
         );
       } catch (error) {
@@ -425,12 +428,24 @@ function invokeNativeHelper(
           }, invocation.timeoutMs);
     timer?.unref();
 
-    child.once('error', (error) => {
+    // The helper binds its child to a Job Object with kill-on-close, so ending
+    // the helper reclaims the whole AppContainer tree.
+    const abort = (): void => {
+      child.kill();
+    };
+    invocation.signal?.addEventListener('abort', abort, { once: true });
+    const settle = (): void => {
       if (timer !== null) clearTimeout(timer);
+      invocation.signal?.removeEventListener('abort', abort);
+    };
+    if (invocation.signal?.aborted === true) abort();
+
+    child.once('error', (error) => {
+      settle();
       reject(error);
     });
     child.once('exit', (code, signal) => {
-      if (timer !== null) clearTimeout(timer);
+      settle();
       resolveResult({ exitCode: code ?? (signal ? 128 : 1), signal: signal ?? null });
     });
   });

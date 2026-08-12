@@ -22,6 +22,15 @@ export interface SandboxCommand {
   readonly args: readonly string[];
   readonly cwd: AbsolutePath;
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * Terminates the confined process tree when the caller stops waiting.
+   *
+   * A probe that times out must take its process with it. Abandoning one
+   * leaves a sandboxed orphan holding its workspace, which is how a stuck
+   * canary shows up as a cleanup error instead of an honest failure. Agent
+   * sessions pass no signal: they run for as long as the user needs.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface SandboxRunResult {

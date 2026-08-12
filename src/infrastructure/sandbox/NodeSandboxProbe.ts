@@ -66,8 +66,10 @@ export class NodeSandboxProbe implements SandboxProbe {
     });
 
     let timedOut = false;
+    const abandon = new AbortController();
     try {
       const result = await withDeadline(request.runner.run(policy, context, {
+        signal: abandon.signal,
         executable: process.execPath,
         args: ['-e', canaryScript(allowedCanary.value, deniedCanary.value)],
         cwd: workspace,
@@ -81,6 +83,9 @@ export class NodeSandboxProbe implements SandboxProbe {
         },
       }), CANARY_TIMEOUT_MS, () => {
         timedOut = true;
+        // Take the process with us: an abandoned canary keeps holding its
+        // workspace, and the next cleanup fails instead of the probe failing.
+        abandon.abort();
       });
       return interpret(result);
     } catch {

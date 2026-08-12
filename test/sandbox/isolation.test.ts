@@ -18,7 +18,7 @@ import { EnvironmentSanitizer } from '../../src/domain/policy/EnvironmentSanitiz
 import { NetworkRule } from '../../src/domain/value-objects/NetworkRule.js';
 import { NodeDestinationBroker } from '../../src/infrastructure/network/NodeDestinationBroker.js';
 import type { PathContext } from '../../src/domain/paths/PathContext.js';
-import type { SandboxPolicy } from '../../src/domain/policy/SandboxPolicy.js';
+import { SandboxPolicy } from '../../src/domain/policy/SandboxPolicy.js';
 import type { DestinationBrokerSession } from '../../src/application/ports/NetworkBroker.js';
 
 /**
@@ -426,5 +426,41 @@ describeOnDarwin('isolation actually isolates (macOS / Seatbelt)', () => {
 
       expect(confined - bare).toBeLessThan(100);
     });
+  });
+});
+describe('a run can be abandoned without leaking the process (macOS / Seatbelt)', () => {
+  it('terminates the sandboxed command when its caller aborts', async () => {
+    // A probe that gives up must take the process with it. Abandoning it left
+    // an orphan holding the workspace directory, which is how the Windows
+    // canary surfaced as `EBUSY` on cleanup rather than as a clean failure.
+    const controller = new AbortController();
+    const root = AbsolutePath.of(realpathSync(mkdtempSync(join(tmpdir(), 'ak-abort-'))));
+    const context: PathContext = { home: root, workspace: root, platform: 'darwin' };
+    const policy = new SandboxPolicy({
+      workspace: root,
+      reads: [
+        ResourceRef.subtree(root),
+        ResourceRef.subtree(AbsolutePath.of(process.execPath).parent.parent),
+      ],
+      writes: [ResourceRef.subtree(root)],
+      denies: [],
+      overrides: [],
+      network: [],
+    });
+
+    const started = Date.now();
+    const run = new SeatbeltRunner().run(policy, context, {
+      executable: process.execPath,
+      args: ['-e', 'setTimeout(() => {}, 120000)'],
+      cwd: root,
+      env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 250).unref();
+
+    const result = await run;
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(result.signal ?? result.exitCode).not.toBe(0);
+    rmSync(root.value, { recursive: true, force: true });
   });
 });

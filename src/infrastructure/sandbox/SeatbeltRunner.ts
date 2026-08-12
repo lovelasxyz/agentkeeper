@@ -105,9 +105,15 @@ export class SeatbeltRunner implements SandboxRunner {
         process.on(signal, handler);
         return [signal, handler] as const;
       });
+      const abort = (): void => {
+        child.kill('SIGKILL');
+      };
+      command.signal?.addEventListener('abort', abort, { once: true });
       const detach = (): void => {
         for (const [signal, handler] of handlers) process.off(signal, handler);
+        command.signal?.removeEventListener('abort', abort);
       };
+      if (command.signal?.aborted === true) abort();
 
       child.once('error', (error) => {
         detach();

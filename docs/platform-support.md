@@ -92,3 +92,23 @@ contain both helper binaries.
 No platform silently falls back to running the command unconfined. When a
 mechanism is missing, `agentkeeper run` fails closed, and `doctor` explains
 which component is unavailable with a stable reason code.
+
+## Narrowing the gaps (roadmap, not blockers)
+
+The `DEGRADED` states above are deliberate, not unfinished work: a boundary
+that fails to launch protects nothing, and a false green is worse than an
+honest yellow. The residual gaps are narrow — system files outside home are
+readable but not writable, tier 2 stays fully denied, and egress is brokered
+(or on Windows, denied outright). Possible future narrowing, in order of
+increasing cost:
+
+- **macOS, targeted denies outside home** (`/private/etc/ssh` host keys,
+  `/var/root`): shrinks `seatbelt.broad-system-read` without the enumerated
+  allowlist that crashes the runtime.
+- **Windows, opt-in loopback exemption**: `CheckNetIsolation LoopbackExempt`
+  scoped to the container SID, granted with elevation during `activate`, would
+  let the broker run and retire `network.appcontainer-deny-only`.
+- **Windows, extra deny ACEs** on sensitive paths outside the workspace.
+- **macOS, Endpoint Security system extension**: Apple entitlement,
+  notarization and user consent — a different class of product, not a profile
+  change.

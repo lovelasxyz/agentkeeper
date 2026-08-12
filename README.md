@@ -1,8 +1,17 @@
 # agentkeeper
 
+**English** · [Русский](README.ru.md)
+
 Confine an AI coding agent to what it needs, using the sandboxing your operating
 system already has. No Docker, no containers, no cloud service, no telemetry —
 and no change to how you work: you keep typing `claude`, `gemini`, `codex`.
+
+It protects your machine, your keys and your API tokens in both directions:
+from what a compromised or injected agent might *do* (read `~/.ssh`, harvest
+`.env` files, exfiltrate), and from who the agent *talks to* — including
+"free proxy providers" whose business model is reselling access to new models
+while your conversation, your key and your workspace secrets flow through
+their server.
 
 ```sh
 npm i -g agentkeeper
@@ -296,6 +305,34 @@ Performance is measured, not asserted. `npm run bench` reports each figure
 against the budget it belongs to, in a clean process — measuring inside the test
 runner inflated everything about fourfold, and `p95(A) - p95(B)` across separate
 batches turned out to be noise rather than a difference.
+
+### Releasing (maintainers)
+
+Releases are published by CI through
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC +
+provenance). There is no npm token anywhere; a release is a tag push.
+
+One-time setup:
+
+1. Create the `agentkeeper` package on npmjs.com (publish a placeholder or
+   reserve the name via your account).
+2. In the package settings add a trusted publisher: this repository, workflow
+   `.github/workflows/publish.yml`, environment left empty.
+
+Cutting a release:
+
+```sh
+npm version 1.0.x          # bumps package.json + lockfile, commits, tags v1.0.x
+git push --follow-tags     # the tag triggers publish.yml
+```
+
+The pipeline verifies on macOS, Linux and Windows, cross-compiles the Windows
+AppContainer helpers, assembles the tarball, refuses it if anything is missing,
+and only then runs `npm publish --provenance --access public`.
+
+A local `npm publish` is deliberately awkward: `prepack` requires the Windows
+helper binaries, which exist only as CI artifacts. Publishing is a pipeline
+decision, not a laptop decision.
 
 ---
 

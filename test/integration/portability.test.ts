@@ -45,6 +45,21 @@ describe('build and CI portability', () => {
     expect(readFileSync(join(root, 'src/keep.ts'), 'utf8')).toBe('source');
   });
 
+  it('verifies a release on the same toolchain CI verified', () => {
+    // A release pinned to a different Node patch than CI is a release nobody
+    // tested: the pin drifted out of `npm@latest`'s supported range and the
+    // publish job died before it reached a single check.
+    const versions = new Set(
+      ['.github/workflows/ci.yml', '.github/workflows/publish.yml'].flatMap((relative) =>
+        [...readFileSync(join(repository, relative), 'utf8').matchAll(/node-version: '([^']+)'/g)].map(
+          (match) => match[1] as string,
+        ),
+      ),
+    );
+
+    expect([...versions]).toEqual(['22']);
+  });
+
   it('keeps every workflow trigger key well formed', () => {
     // A stray second colon makes the key `workflow_dispatch:` rather than the
     // event, and GitHub then rejects the whole file: the run reports failure

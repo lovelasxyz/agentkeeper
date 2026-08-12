@@ -27,6 +27,14 @@ jobs:
       - name: Install bubblewrap
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      # See ci.yml: the 24.04 AppArmor profile denies CAP_NET_ADMIN inside the
+      # bubblewrap user namespace, which breaks loopback for the broker relay.
+      - name: Allow unprivileged user namespaces for bubblewrap
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 \
+            || echo "apparmor userns restriction knob not present; continuing"
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint:arch

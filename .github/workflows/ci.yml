@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets a platform be re-checked from the UI without an empty commit, which
+  # matters when the failing OS is not the one on the maintainer's desk.
+  workflow_dispatch::
 
 permissions:
   contents: read
@@ -35,6 +38,17 @@ jobs:
       - name: Install bubblewrap
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      # Ubuntu 24.04 ships an AppArmor profile that lets bubblewrap create a
+      # user namespace but strips CAP_NET_ADMIN inside it, so bwrap cannot
+      # bring up loopback and the brokered network path fails with
+      # `RTM_NEWADDR: Operation not permitted`. The runner is a throwaway VM.
+      # Tolerated if the knob is absent: older kernels do not have it.
+      - name: Allow unprivileged user namespaces for bubblewrap
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 \
+            || echo "apparmor userns restriction knob not present; continuing"
 
       - run: npm ci
       - run: npm run typecheck

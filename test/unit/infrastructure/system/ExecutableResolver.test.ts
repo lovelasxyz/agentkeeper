@@ -17,9 +17,16 @@ async function workspace(): Promise<string> {
   return root;
 }
 
+/**
+ * Windows decides executability by extension, not by a permission bit, so a
+ * bare `agent` is not runnable there and the resolver is right to ignore it.
+ * npm installs agent CLIs as `.cmd` shims, which is what this reproduces.
+ */
+const EXECUTABLE_SUFFIX = process.platform === 'win32' ? '.cmd' : '';
+
 async function placeExecutable(directory: string, name: string): Promise<string> {
   await mkdir(directory, { recursive: true });
-  const file = join(directory, name);
+  const file = join(directory, `${name}${EXECUTABLE_SUFFIX}`);
   await writeFile(file, '#!/bin/sh\nexit 0\n');
   await chmod(file, 0o755);
   return file;

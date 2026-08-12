@@ -1,6 +1,9 @@
 #define UNICODE
 #define _UNICODE
 #define WIN32_LEAN_AND_MEAN
+// windows.h defines function-like `min`/`max` macros that collide with
+// `std::numeric_limits<T>::max()`. WIN32_LEAN_AND_MEAN does not suppress them.
+#define NOMINMAX
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0602
 #endif

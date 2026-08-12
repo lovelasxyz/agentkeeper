@@ -8,6 +8,15 @@ const source = readFileSync(
 );
 
 describe('Windows native isolation contract (portable source audit)', () => {
+  it('suppresses the windows.h min/max macros before including it', () => {
+    // Without NOMINMAX, `windows.h` defines a function-like `max` macro that
+    // breaks `std::numeric_limits<int>::max()` and fails the whole build.
+    expect(source).toMatch(/#define\s+NOMINMAX/);
+    expect(source.indexOf('#define NOMINMAX')).toBeLessThan(
+      source.indexOf('#include <windows.h>'),
+    );
+  });
+
   it('has exactly one launch path and that path requires an AppContainer token', () => {
     expect(source.match(/\bCreateProcessW\s*\(/g)).toHaveLength(1);
     expect(source).toMatch(/SECURITY_CAPABILITIES\s+capabilities/);

@@ -31,10 +31,18 @@ export abstract class ArtifactRule extends Rule<Artifact> {
   }
 }
 
-/** Same three constructs as `PathPattern`, applied to a workspace-relative path. */
+/**
+ * Same three constructs as `PathPattern`, applied to a workspace-relative path.
+ *
+ * Case-insensitive, and that is a security decision rather than convenience.
+ * Windows paths reach the domain already lower-cased, so an exact match made
+ * every `CLAUDE.md`/`AGENTS.md` rule unreachable on that platform — vector V3
+ * undetected across a whole OS. Matching more broadly can only add findings a
+ * human then reviews; matching less can only hide an attack.
+ */
 export function matchRelative(pattern: string, relativePath: string): boolean {
-  const patternSegments = pattern.split('/');
-  const pathSegments = relativePath.split('/');
+  const patternSegments = pattern.toLowerCase().split('/');
+  const pathSegments = relativePath.toLowerCase().split('/');
   return match(patternSegments, 0, pathSegments, 0);
 }
 

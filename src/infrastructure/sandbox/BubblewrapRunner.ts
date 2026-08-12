@@ -13,6 +13,8 @@ import type { SandboxPolicy } from '../../domain/policy/SandboxPolicy.js';
 
 const CANDIDATES = ['/usr/bin/bwrap', '/bin/bwrap', '/usr/local/bin/bwrap'];
 const FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
+/** How long the confined tree may take to shut down before it is torn down. */
+const GRACE_MS = 5_000;
 
 /**
  * Linux isolation via bubblewrap (spec §4.1).
@@ -147,6 +149,7 @@ export class BubblewrapRunner implements SandboxRunner {
         stdio: 'inherit',
       });
 
+      const pending: NodeJS.Timeout[] = [];
       const handlers = FORWARDED_SIGNALS.map((signal) => {
         const handler = (): void => {
           // bwrap forks rather than execs, and `--new-session` — the flag that
@@ -164,7 +167,13 @@ export class BubblewrapRunner implements SandboxRunner {
               // Already gone: the tree is collapsing, which is the intent.
             }
           }
-          child.kill(signal);
+          // Not bwrap yet. `--die-with-parent` turns its death into a SIGKILL
+          // for the tree, which would cut the agent off mid-shutdown — the
+          // handler runs but its exit code never arrives. Give the tree a
+          // moment to leave on its own terms, then take it down regardless.
+          const forceful = setTimeout(() => child.kill(signal), GRACE_MS);
+          forceful.unref();
+          pending.push(forceful);
         };
         process.on(signal, handler);
         return [signal, handler] as const;
@@ -177,6 +186,7 @@ export class BubblewrapRunner implements SandboxRunner {
       command.signal?.addEventListener('abort', abort, { once: true });
       const detach = (): void => {
         for (const [signal, handler] of handlers) process.off(signal, handler);
+        for (const timer of pending) clearTimeout(timer);
         command.signal?.removeEventListener('abort', abort);
       };
       if (command.signal?.aborted === true) abort();

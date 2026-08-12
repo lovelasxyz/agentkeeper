@@ -86,7 +86,11 @@ describe('NodeDestinationBroker', () => {
     ).toContain('431 Request Header Fields Too Large');
   });
 
-  it('uses a private Unix socket transport for an isolated Linux namespace', async () => {
+  // The Unix-socket relay is the Linux transport. Windows has no bindable
+  // socket at that path, so asserting it there tests the runner, not the code.
+  it.skipIf(process.platform === 'win32')(
+    'uses a private Unix socket transport for an isolated Linux namespace',
+    async () => {
     const broker = new NodeDestinationBroker();
     const scratch = await mkdtemp(join(tmpdir(), 'agentkeeper-broker-test-'));
     const session = await broker.start({
@@ -99,12 +103,13 @@ describe('NodeDestinationBroker', () => {
       await rm(scratch, { recursive: true, force: true });
     });
 
-    expect(session.enforcement).toMatchObject({
-      kind: 'brokered',
-      transport: { kind: 'unix-socket-relay' },
-    });
-    expect(session.proxyUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-  });
+      expect(session.enforcement).toMatchObject({
+        kind: 'brokered',
+        transport: { kind: 'unix-socket-relay' },
+      });
+      expect(session.proxyUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    },
+  );
 
   it('refuses legacy any-host and UDP rules instead of silently weakening them', async () => {
     const broker = new NodeDestinationBroker();

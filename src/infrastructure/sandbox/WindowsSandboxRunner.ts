@@ -20,6 +20,8 @@ import {
 } from './WindowsReadDenyScanner.js';
 import { WindowsPolicyTranslator } from './WindowsPolicyTranslator.js';
 
+/** Creating and deleting one AppContainer profile is fast; anything slower is stuck. */
+const PREFLIGHT_TIMEOUT_MS = 15_000;
 const REQUEST_MAGIC = Buffer.from('AKSBOX01', 'ascii');
 const REQUEST_VERSION = 2;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
@@ -64,6 +66,12 @@ export interface WindowsSandboxInvocation {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string>>;
   readonly stdio: 'ignore' | 'inherit';
+  /**
+   * Bound for a preflight only. A real agent session runs as long as the user
+   * needs it, but a probe that never returns is worse than one that fails:
+   * the CLI would hang while looking exactly like a working boundary.
+   */
+  readonly timeoutMs?: number;
 }
 
 export interface WindowsSandboxRunnerDependencies {
@@ -147,6 +155,7 @@ export class WindowsSandboxRunner implements SandboxRunner {
           cwd: dirname(this.dependencies.helperPath),
           env: definedEnvironment(process.env),
           stdio: 'ignore',
+          timeoutMs: PREFLIGHT_TIMEOUT_MS,
         },
       );
     } catch (error) {
@@ -403,8 +412,25 @@ function invokeNativeHelper(
       windowsHide: false,
       shell: false,
     });
-    child.once('error', reject);
+    const timer =
+      invocation.timeoutMs === undefined
+        ? null
+        : setTimeout(() => {
+            child.kill();
+            reject(
+              new Error(
+                `the native helper did not answer within ${invocation.timeoutMs ?? 0} ms`,
+              ),
+            );
+          }, invocation.timeoutMs);
+    timer?.unref();
+
+    child.once('error', (error) => {
+      if (timer !== null) clearTimeout(timer);
+      reject(error);
+    });
     child.once('exit', (code, signal) => {
+      if (timer !== null) clearTimeout(timer);
       resolveResult({ exitCode: code ?? (signal ? 128 : 1), signal: signal ?? null });
     });
   });

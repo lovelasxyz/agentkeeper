@@ -103,6 +103,25 @@ describe('WindowsSandboxRunner contract', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('bounds the preflight so a hung helper degrades instead of hanging the CLI', async () => {
+    // A native helper that never returns must not freeze `doctor` or `run`.
+    // Waiting forever is indistinguishable from a boundary that is working.
+    const runner = new WindowsSandboxRunner(
+      dependencies({
+        invoke: (_helper, _args, invocation) =>
+          new Promise((_resolve, reject) => {
+            expect(invocation.timeoutMs).toBeGreaterThan(0);
+            setTimeout(() => reject(new Error('preflight timed out')), 1).unref();
+          }),
+      }),
+    );
+
+    await expect(runner.diagnose()).resolves.toMatchObject({
+      level: 'unsupported',
+      code: 'windows.helper-probe-failed',
+    });
+  });
+
   it('requires the native AppContainer API preflight and reports its failure code', async () => {
     const runner = new WindowsSandboxRunner(
       dependencies({ invoke: async () => ({ exitCode: 201, signal: null }) }),

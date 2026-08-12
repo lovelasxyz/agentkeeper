@@ -56,9 +56,26 @@ command never passes through a `PreToolUse` hook at all.
 | Property | Guarantee |
 |---|---|
 | TTY | Preserved — interactive prompts, colours and progress rendering work |
-| Signals | macOS and Linux forward `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT` to the agent. On Windows the Job Object terminates the whole process tree when the launcher exits. |
+| Signals | macOS delivers `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT` to the agent itself. On Linux and Windows the sandbox is **terminated as a tree** instead — see below. |
 | Exit code | Passed through unchanged |
 | stdout/stderr | Not buffered or rewritten by agentkeeper |
+
+### Signals on Linux: a known gap
+
+`sandbox-exec` **execs** the command, so on macOS the process you signal is the
+agent, and its handler runs normally.
+
+bubblewrap **forks** instead, and `--new-session` — the flag that stops a
+compromised agent injecting keystrokes into your terminal — puts the sandbox in
+its own session. A `SIGTERM` aimed at `bwrap` therefore never reaches the
+command. The process tree still dies immediately via `--die-with-parent`, so
+Ctrl-C always stops the agent; what it does not get is the chance to shut down
+cleanly and save state.
+
+Closing this needs a forwarder running as PID 1 inside the namespace with a
+control channel from outside. Dropping `--new-session` would fix signals by
+removing a real protection, which is the wrong trade. On Windows the Job Object
+terminates the tree for the same practical result.
 
 ## An agent's own sandbox
 

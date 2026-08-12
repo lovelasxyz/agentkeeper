@@ -1,6 +1,14 @@
 import type { Command } from './Command.js';
 
-const VERSION = '0.1.0';
+/**
+ * Injected by the bundler from package.json, so `--version` cannot drift from
+ * what was published. Kept as a build-time constant rather than a runtime read:
+ * this module is on the hook path, whose whole budget is 50 ms.
+ */
+declare const __AGENTKEEPER_VERSION__: string;
+
+const VERSION =
+  typeof __AGENTKEEPER_VERSION__ === 'string' ? __AGENTKEEPER_VERSION__ : '0.0.0-dev';
 
 /**
  * Name, help text, and how to load the implementation.

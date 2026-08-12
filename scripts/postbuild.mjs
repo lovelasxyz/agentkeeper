@@ -1,6 +1,10 @@
 import { build } from 'esbuild';
-import { chmod } from 'node:fs/promises';
+import { chmod, readFile } from 'node:fs/promises';
 import { buildWindowsSandbox } from './build-windows-sandbox.mjs';
+
+const { version } = JSON.parse(
+  await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+);
 
 /**
  * Bundles the CLI into a single file.
@@ -21,6 +25,8 @@ await build({
   platform: 'node',
   target: 'node20',
   format: 'esm',
+  // Single source of truth for `--version`: the manifest that gets published.
+  define: { __AGENTKEEPER_VERSION__: JSON.stringify(version) },
   // Dynamic imports stay dynamic: the hook must not pay for the installer.
   // One file, not chunks: chunking re-introduces per-chunk resolution and
   // measured worse than the single bundle.

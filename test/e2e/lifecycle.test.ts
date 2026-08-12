@@ -89,8 +89,14 @@ describe('the package presents a usable command line', () => {
     expect(result.status).toBe(1);
   });
 
-  it('prints a version', () => {
-    expect(cli(['--version']).stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+  it('prints the version it was actually published as', () => {
+    // A hard-coded string drifted from package.json and shipped a 1.0.0
+    // package whose `--version` answered 0.1.0 — the first thing anyone checks.
+    const { version } = JSON.parse(
+      readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
+    ) as { version: string };
+
+    expect(cli(['--version']).stdout.trim()).toBe(version);
   });
 
   it('rejects an unknown command', () => {

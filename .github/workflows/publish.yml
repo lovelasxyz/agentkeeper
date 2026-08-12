@@ -123,13 +123,9 @@ jobs:
           name: agentkeeper-sbom
           path: agentkeeper.cdx.json
           if-no-files-found: error
-      # Trusted publishing is configured in a package's settings, so it cannot
-      # exist before the package does. The first release therefore authenticates
-      # with NPM_TOKEN; afterwards, configure the trusted publisher on npmjs.com
-      # (repo lovelasxyz/agentkeeper, workflow publish.yml), revoke the token and
-      # delete this `env:` block — OIDC then needs no stored secret at all.
-      # Provenance is unaffected: it comes from `id-token: write` either way.
+      # No stored credential: OIDC trusted publishing supplies a short-lived one
+      # from `id-token: write`. 1.0.0 needed a token because a trusted publisher
+      # is configured in a package's settings, which cannot exist before the
+      # package does; that token was revoked immediately afterwards.
       # The prepack gate rechecks native artifacts after its production build.
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

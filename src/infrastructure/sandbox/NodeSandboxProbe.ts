@@ -65,8 +65,9 @@ export class NodeSandboxProbe implements SandboxProbe {
       network: [],
     });
 
+    let timedOut = false;
     try {
-      const result = await request.runner.run(policy, context, {
+      const result = await withDeadline(request.runner.run(policy, context, {
         executable: process.execPath,
         args: ['-e', canaryScript(allowedCanary.value, deniedCanary.value)],
         cwd: workspace,
@@ -78,12 +79,51 @@ export class NodeSandboxProbe implements SandboxProbe {
             ? windowsProbeEnvironment(home.value, probeTemp.value)
             : {}),
         },
+      }), CANARY_TIMEOUT_MS, () => {
+        timedOut = true;
       });
       return interpret(result);
     } catch {
-      return failure('runner-failed', false, false, false, false, null, null);
+      // A canary that never returns is not a boundary that works: `doctor`
+      // must say the protection is unverified instead of hanging forever.
+      return failure(
+        timedOut ? 'canary-timed-out' : 'runner-failed',
+        false,
+        false,
+        false,
+        false,
+        null,
+        null,
+      );
     }
   }
+}
+
+/** A canary is a few milliseconds of work; anything near this is stuck. */
+const CANARY_TIMEOUT_MS = 30_000;
+
+function withDeadline<T>(
+  work: Promise<T>,
+  milliseconds: number,
+  onTimeout: () => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+      reject(new Error(`The sandbox canary did not finish within ${milliseconds} ms`));
+    }, milliseconds);
+    timer.unref();
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 function windowsProbeEnvironment(

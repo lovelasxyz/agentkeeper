@@ -258,6 +258,8 @@ function probeFailureReason(code: SandboxProbeCode): ProtectionReason {
     'workspace-unreadable': 'The sandbox denied the workspace allow canary, so the boundary is unusable.',
     'child-probe-failed': 'The child-process deny canary did not complete successfully.',
     'runner-failed': 'The sandbox runner could not start the canary process.',
+    'canary-timed-out':
+      'The sandbox canary did not finish in time, so the boundary could not be verified.',
     'unexpected-exit': 'The sandbox canary returned an unrecognised result.',
   };
   if (code === 'passed') {

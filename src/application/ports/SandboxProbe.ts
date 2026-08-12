@@ -8,6 +8,8 @@ export type SandboxProbeCode =
   | 'workspace-unreadable'
   | 'child-probe-failed'
   | 'runner-failed'
+  /** The canary never finished, so the boundary is unverified rather than proven. */
+  | 'canary-timed-out'
   | 'unexpected-exit';
 
 export interface SandboxProbeChecks {

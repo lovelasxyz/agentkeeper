@@ -65,7 +65,15 @@ describe('build and CI portability', () => {
     expect(workflow).toMatch(/npm run clean/);
     expect(workflow).toMatch(/npm run build/);
     expect(workflow).toMatch(/msvc-dev-cmd/);
-    expect(workflow).toMatch(/name: Sandbox isolation tests\s+run: npm run test:sandbox/);
+    expect(workflow).toMatch(/npm run test:sandbox/);
+    // The real-boundary suite gates the declared full-support platforms and is
+    // reported-but-not-gating on Windows, which the spec scopes to post-1.0.
+    // Exactly one step may be non-blocking, and it must be the Windows one.
+    const nonBlocking = workflow.match(/continue-on-error: true/g) ?? [];
+    expect(nonBlocking).toHaveLength(1);
+    expect(workflow).toMatch(
+      /Sandbox isolation tests \(Windows[^\n]*\n\s+if: runner\.os == 'Windows'\n\s+continue-on-error: true/,
+    );
   });
 
   it('places the Windows native sandbox helper in the package assembled on Linux', () => {

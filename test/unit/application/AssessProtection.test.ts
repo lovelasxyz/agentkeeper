@@ -454,6 +454,7 @@ describe('AssessProtection', () => {
     'workspace-unreadable',
     'child-probe-failed',
     'runner-failed',
+    'canary-timed-out',
     'unexpected-exit',
     'passed',
   ] as const)('maps a failed %s probe into an UNPROTECTED structured reason', async (code) => {

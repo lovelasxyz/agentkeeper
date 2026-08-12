@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { BubblewrapArgumentBuilder } from './BubblewrapArgumentBuilder.js';
 import type {
@@ -154,7 +154,9 @@ export class BubblewrapRunner implements SandboxRunner {
           // puts the sandbox in its own session. Signalling bwrap alone kills
           // the tree through `--die-with-parent` without the agent ever seeing
           // the signal, so it never gets to shut down cleanly. Deliver it to
-          // the confined process as well; the host PID namespace can see it.
+          // the confined tree first, then to bwrap: the agent sits below an
+          // in-namespace init, and below the network relay when egress is
+          // brokered, so only a full walk reaches it.
           for (const descendant of descendantsOf(child.pid)) {
             try {
               process.kill(descendant, signal);
@@ -192,22 +194,50 @@ export class BubblewrapRunner implements SandboxRunner {
 }
 
 /**
- * Immediate children of a process, as the host PID namespace sees them.
+ * Every descendant of a process, as the host PID namespace sees them.
  *
- * A nested PID namespace is still fully visible from the host, so the process
- * bwrap started — the agent, or the network relay that wraps it — can be
- * signalled directly. Reads `/proc`, and answers nothing anywhere else.
+ * A nested PID namespace is fully visible from the host, but the tree is
+ * deeper than it looks: bwrap runs an init as PID 1 inside the namespace and
+ * the agent below it, with the network relay in between when egress is
+ * brokered. Signalling only the direct child hits that init, which ignores
+ * signals it has no handler for — so the walk has to reach the whole tree.
+ *
+ * Built from `/proc/<pid>/stat` rather than `.../children`, which is optional
+ * kernel configuration; the parent field always exists.
  */
 function descendantsOf(pid: number | undefined): readonly number[] {
   if (pid === undefined || process.platform !== 'linux') return [];
+
+  const parents = new Map<number, number>();
+  let entries: string[];
   try {
-    const raw = readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8');
-    return raw
-      .split(/\s+/)
-      .map((entry) => Number.parseInt(entry, 10))
-      .filter((entry) => Number.isInteger(entry) && entry > 1);
+    entries = readdirSync('/proc');
   } catch {
-    // No procfs, or the process is already gone. Signalling bwrap still ends it.
     return [];
   }
+  for (const entry of entries) {
+    const candidate = Number.parseInt(entry, 10);
+    if (!Number.isInteger(candidate) || String(candidate) !== entry) continue;
+    try {
+      const stat = readFileSync(`/proc/${candidate}/stat`, 'utf8');
+      // `pid (comm) state ppid ...`, and comm may contain spaces or parens.
+      const afterName = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const parent = Number.parseInt(afterName[1] ?? '', 10);
+      if (Number.isInteger(parent)) parents.set(candidate, parent);
+    } catch {
+      // The process exited while we were reading; it needs no signal.
+    }
+  }
+
+  const found: number[] = [];
+  const queue = [pid];
+  while (queue.length > 0) {
+    const current = queue.shift() as number;
+    for (const [child, parent] of parents) {
+      if (parent !== current || found.includes(child)) continue;
+      found.push(child);
+      queue.push(child);
+    }
+  }
+  return found;
 }

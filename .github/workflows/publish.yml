@@ -41,7 +41,19 @@ jobs:
       - run: npm run coverage
       - run: npm run clean
       - run: npm run build
-      - run: npm run test:sandbox
+      # Gating on the declared full-support platforms only. Windows
+      # AppContainer is post-1.0 by design (spec §50, §63): reported on every
+      # release, never allowed to claim the platform works, and never allowed
+      # to block a release it was never in scope for.
+      - name: Sandbox isolation tests
+        if: runner.os != 'Windows'
+        run: npm run test:sandbox
+
+      - name: Sandbox isolation tests (Windows, not yet a release gate)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: npm run test:sandbox
+
       - name: End-to-end install lifecycle
         if: runner.os != 'Windows'
         run: npm run test:e2e
@@ -111,6 +123,13 @@ jobs:
           name: agentkeeper-sbom
           path: agentkeeper.cdx.json
           if-no-files-found: error
-      # OIDC trusted publishing supplies the short-lived credential. The
-      # prepack gate rechecks native artifacts after its production build.
+      # Trusted publishing is configured in a package's settings, so it cannot
+      # exist before the package does. The first release therefore authenticates
+      # with NPM_TOKEN; afterwards, configure the trusted publisher on npmjs.com
+      # (repo lovelasxyz/agentkeeper, workflow publish.yml), revoke the token and
+      # delete this `env:` block — OIDC then needs no stored secret at all.
+      # Provenance is unaffected: it comes from `id-token: write` either way.
+      # The prepack gate rechecks native artifacts after its production build.
       - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

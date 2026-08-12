@@ -66,16 +66,20 @@ describe('build and CI portability', () => {
     expect(workflow).toMatch(/npm run build/);
     expect(workflow).toMatch(/msvc-dev-cmd/);
     expect(workflow).toMatch(/npm run test:sandbox/);
+
     // The real-boundary suite gates the declared full-support platforms and is
     // reported-but-not-gating on Windows, which the spec scopes to post-1.0.
-    // Exactly one step may be non-blocking, and it must be the Windows one.
-    const nonBlocking = workflow.match(/continue-on-error: true/g) ?? [];
-    expect(nonBlocking).toHaveLength(1);
+    // In *both* workflows exactly one step may be non-blocking, and it must be
+    // that one: a relaxation anywhere else would quietly stop gating a release.
     // `\s+` rather than `\n`: a Windows checkout delivers CRLF, and asserting
     // on the separator would fail on the very platform this step describes.
-    expect(workflow).toMatch(
-      /Sandbox isolation tests \(Windows[^\r\n]*\s+if: runner\.os == 'Windows'\s+continue-on-error: true/,
-    );
+    for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
+      const text = readFileSync(join(repository, relative), 'utf8');
+      expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(1);
+      expect(text, relative).toMatch(
+        /Sandbox isolation tests \(Windows[^\r\n]*\s+if: runner\.os == 'Windows'\s+continue-on-error: true/,
+      );
+    }
   });
 
   it('places the Windows native sandbox helper in the package assembled on Linux', () => {

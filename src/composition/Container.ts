@@ -51,6 +51,8 @@ export interface ManagedInstallationComponents {
   readonly planner: ProtectionInstallationPlanner;
   readonly executor: TransactionalProtectionInstallationExecutor;
   readonly agents: readonly ManagedAgent[];
+  /** Recorded launch path, which a background service must be able to read. */
+  readonly entrypoint: AbsolutePath;
 }
 
 /**
@@ -290,6 +292,7 @@ export class Container {
         service,
         git,
       ),
+      entrypoint: agentkeeperEntrypoint,
       agents: Object.freeze(
         managed.MANAGED_AGENTS.filter((agent) => agentExecutables[agent] !== undefined),
       ),

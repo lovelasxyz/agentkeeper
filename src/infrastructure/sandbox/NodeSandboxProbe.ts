@@ -70,6 +70,7 @@ export class NodeSandboxProbe implements SandboxProbe {
     try {
       const result = await withDeadline(request.runner.run(policy, context, {
         signal: abandon.signal,
+        deadlineMs: CANARY_TIMEOUT_MS,
         executable: process.execPath,
         args: ['-e', canaryScript(allowedCanary.value, deniedCanary.value)],
         cwd: workspace,

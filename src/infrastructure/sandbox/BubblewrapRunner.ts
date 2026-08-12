@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { BubblewrapArgumentBuilder } from './BubblewrapArgumentBuilder.js';
 import type {
@@ -148,6 +149,19 @@ export class BubblewrapRunner implements SandboxRunner {
 
       const handlers = FORWARDED_SIGNALS.map((signal) => {
         const handler = (): void => {
+          // bwrap forks rather than execs, and `--new-session` — the flag that
+          // stops a compromised agent injecting keystrokes into the terminal —
+          // puts the sandbox in its own session. Signalling bwrap alone kills
+          // the tree through `--die-with-parent` without the agent ever seeing
+          // the signal, so it never gets to shut down cleanly. Deliver it to
+          // the confined process as well; the host PID namespace can see it.
+          for (const descendant of descendantsOf(child.pid)) {
+            try {
+              process.kill(descendant, signal);
+            } catch {
+              // Already gone: the tree is collapsing, which is the intent.
+            }
+          }
           child.kill(signal);
         };
         process.on(signal, handler);
@@ -174,5 +188,26 @@ export class BubblewrapRunner implements SandboxRunner {
         resolve({ exitCode: code ?? (signal ? 128 : 1), signal: signal ?? null });
       });
     });
+  }
+}
+
+/**
+ * Immediate children of a process, as the host PID namespace sees them.
+ *
+ * A nested PID namespace is still fully visible from the host, so the process
+ * bwrap started — the agent, or the network relay that wraps it — can be
+ * signalled directly. Reads `/proc`, and answers nothing anywhere else.
+ */
+function descendantsOf(pid: number | undefined): readonly number[] {
+  if (pid === undefined || process.platform !== 'linux') return [];
+  try {
+    const raw = readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8');
+    return raw
+      .split(/\s+/)
+      .map((entry) => Number.parseInt(entry, 10))
+      .filter((entry) => Number.isInteger(entry) && entry > 1);
+  } catch {
+    // No procfs, or the process is already gone. Signalling bwrap still ends it.
+    return [];
   }
 }

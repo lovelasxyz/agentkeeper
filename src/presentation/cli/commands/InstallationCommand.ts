@@ -4,6 +4,8 @@ import { NodeSandboxProbe } from '../../../infrastructure/sandbox/NodeSandboxPro
 import { Palette, renderDiff } from '../../messages/render.js';
 import { Flags, type Command } from '../Command.js';
 import type { InstallationOperation } from '../../../application/ports/InstallationLifecycle.js';
+import type { AbsolutePath } from '../../../domain/value-objects/AbsolutePath.js';
+import type { Platform } from '../../../domain/value-objects/Platform.js';
 
 /** Transactional install-once lifecycle used by activate/repair/deactivate. */
 export class InstallationCommand implements Command {
@@ -176,6 +178,17 @@ export class InstallationCommand implements Command {
       write(`${palette.yellow('!')} Degraded: ${reason}`);
       write('  Interception is installed; run `agentkeeper doctor` for the effective status.');
     }
+    // Only where a watcher was just asked to run; after a deactivation there is
+    // nothing left that could fail to start.
+    const unreachable =
+      this.operation === 'deactivate'
+        ? null
+        : backgroundLaunchWarning(
+            components.entrypoint,
+            container.files.realPath(container.environment.identityHome),
+            container.environment.platform,
+          );
+    if (unreachable !== null) write(`${palette.yellow('!')} ${unreachable}`);
     if (this.operation === 'activate') {
       write('Open a new terminal once; after that use your agent command normally.');
       write('Verify the effective boundary with `agentkeeper doctor`.');
@@ -213,4 +226,31 @@ export class InstallationCommand implements Command {
     });
     await container.baseline.save(snapshot);
   }
+}
+
+/** Directories macOS withholds from background agents until the user consents. */
+const TCC_PROTECTED = ['Desktop', 'Documents', 'Downloads'];
+
+/**
+ * Explains, at activation time, a watcher that could never run.
+ *
+ * macOS TCC denies a launchd agent access to these directories, so a CLI
+ * installed from a clone inside one of them cannot read its own entrypoint:
+ * launchd accepts the registration, the job exits, and it respawns forever with
+ * `EPERM` in a log nobody thinks to open. Naming it here costs one line and
+ * saves the whole diagnosis.
+ */
+export function backgroundLaunchWarning(
+  entrypoint: AbsolutePath,
+  home: AbsolutePath,
+  platform: Platform,
+): string | null {
+  if (platform !== 'darwin') return null;
+  const directory = TCC_PROTECTED.find((name) => home.join(name).contains(entrypoint));
+  if (directory === undefined) return null;
+  return (
+    `The resident watcher will not start: macOS withholds ~/${directory} from background ` +
+    `agents, so it cannot read ${entrypoint.value}. Everything else is active. ` +
+    'Install with `npm i -g agentkeeper` and run `agentkeeper repair` to enable it.'
+  );
 }

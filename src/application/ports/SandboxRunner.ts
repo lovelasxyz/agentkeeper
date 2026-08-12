@@ -31,6 +31,13 @@ export interface SandboxCommand {
    * sessions pass no signal: they run for as long as the user needs.
    */
   readonly signal?: AbortSignal;
+  /**
+   * Milliseconds a *probe* may take. Absent for an agent session, which runs
+   * for as long as the user needs. Backends that own the confined tree enforce
+   * it themselves, so a stuck child is reclaimed by the process holding it
+   * rather than abandoned to whoever notices first.
+   */
+  readonly deadlineMs?: number;
 }
 
 export interface SandboxRunResult {

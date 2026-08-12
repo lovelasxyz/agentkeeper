@@ -59,11 +59,24 @@ describe('Windows native isolation contract (portable source audit)', () => {
     }
   });
 
-  it('parses protocol v2 exact denies and installs them after allow capabilities', () => {
-    expect(source).toMatch(/kRequestVersion\s*=\s*2/);
+  it('parses protocol v3 exact denies and installs them after allow capabilities', () => {
+    expect(source).toMatch(/kRequestVersion\s*=\s*3/);
     expect(source).toMatch(/DeniedResources\(&request->denies\)/);
     expect(source).toMatch(/desired_grants[\s\S]*?GRANT_ACCESS[\s\S]*?desired_denies[\s\S]*?DENY_ACCESS/);
     expect(source.indexOf('DENY_ACCESS')).toBeGreaterThan(source.indexOf('GRANT_ACCESS'));
+  });
+
+  it('never waits forever on a child a probe gave a deadline', () => {
+    // `WaitForSingleObject(..., INFINITE)` turned a stuck AppContainer child
+    // into a hung launcher: the CLI waited, the workspace stayed locked, and
+    // nothing said why. The helper owns the Job Object, so it is the only
+    // process that can reclaim the tree.
+    expect(source).toMatch(/timeout_ms/);
+    expect(source).toMatch(/kChildTimedOut\s*=\s*208/);
+    expect(source).toMatch(/request\.timeout_ms == 0 \? INFINITE : request\.timeout_ms/);
+    expect(source).toMatch(/waited == WAIT_TIMEOUT/);
+    // Reclaimed, not abandoned: the Job dies with the child on the way out.
+    expect(source).toMatch(/WAIT_TIMEOUT[\s\S]{0,200}TerminateAndDrainJob/);
   });
 
   it('rolls back both allow and deny ACE mutations before deleting the ephemeral profile', () => {

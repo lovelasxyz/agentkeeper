@@ -140,3 +140,38 @@ class FakeWatchDriver {
     listener(type, filename);
   }
 }
+describe('a surface this process may never watch', () => {
+  it('is reported once, not on every refresh', async () => {
+    // `/private/var/at/tabs` needs root on macOS. Re-reporting it each time the
+    // coverage refreshed turned the resident watcher into a log-spinning loop,
+    // against a daemon whose budget is ~0% idle CPU.
+    const root = await temporaryRoot();
+    const forbidden = root.join('forbidden');
+    await mkdir(forbidden.value, { recursive: true });
+
+    const driver = new FakeWatchDriver();
+    const watchDirectory: WatchDirectory = (path, options, listener) => {
+      if (path === forbidden.value) {
+        throw Object.assign(new Error(`EACCES: permission denied, watch '${path}'`), {
+          code: 'EACCES',
+        });
+      }
+      return driver.watch(path, options, listener);
+    };
+
+    const faults: string[] = [];
+    const started = await new NodeWatchService({ watchDirectory }).start(
+      [root],
+      () => undefined,
+      (fault) => faults.push(fault.reason),
+    );
+    expect(faults).toHaveLength(1);
+
+    // A rename triggers a coverage refresh, which retries the same directory.
+    driver.change(root, 'rename', 'forbidden');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    started.session.close();
+
+    expect(faults, faults.join('\n')).toHaveLength(1);
+  });
+});

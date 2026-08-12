@@ -123,15 +123,20 @@ export function renderIntegrations(
     return `${mark[status]} ${row.agent.padEnd(width)}  ${explain[status]}`;
   });
 
-  const unprotected = integrations.filter((row) => classifyIntegration(row) === 'unprotected');
-  return [
-    palette.bold('agentkeeper integrations'),
-    ...lines,
-    '',
-    unprotected.length === 0
-      ? 'Every agent found on this machine launches through agentkeeper.'
-      : `Run \`agentkeeper activate\` to intercept: ${unprotected
-          .map((row) => row.agent)
-          .join(', ')}.`,
-  ];
+  const named = (status: AgentIntegrationStatus): string[] =>
+    integrations.filter((row) => classifyIntegration(row) === status).map((row) => row.agent);
+  const unprotected = named('unprotected');
+  const broken = named('needs-repair');
+
+  // "Every agent is covered" must not appear next to an agent that is not.
+  const footer =
+    unprotected.length > 0
+      ? `Run \`agentkeeper activate\` to intercept: ${unprotected.join(', ')}.`
+      : broken.length > 0
+        ? `Run \`agentkeeper repair\`: ${broken.join(', ')} ${
+            broken.length === 1 ? 'is' : 'are'
+          } installed but not healthy.`
+        : 'Every agent found on this machine launches through agentkeeper.';
+
+  return [palette.bold('agentkeeper integrations'), ...lines, '', footer];
 }

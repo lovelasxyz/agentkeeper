@@ -374,6 +374,25 @@ describe('BaselineCollector', () => {
     await expect(collector.collect(context)).rejects.toThrow(/EIO/);
   });
 
+  it('baselines only the files a sensitive pattern names, not the directory holding them', async () => {
+    // `~/.claude/settings*.json` anchors on `~/.claude`, and collecting the
+    // whole directory both blew the listing limit — activation failed outright
+    // on a machine with an ordinary Claude Code history — and would have
+    // baselined session files that change every few minutes.
+    const files = new InMemoryFileSystem();
+    await files.write(HOME.join('.claude/settings.json'), '{"hooks":{}}');
+    for (let index = 0; index < 2_100; index += 1) {
+      await files.write(HOME.join(`.claude/projects/session-${index}.jsonl`), 'noise\n');
+    }
+    const collector = new BaselineCollector(files, SensitivePathRegistry.default(), new FixedClock());
+
+    const snapshot = await collector.collect(context);
+
+    expect(snapshot.map((entry) => entry.path.value)).toEqual([
+      '/Users/dev/.claude/settings.json',
+    ]);
+  });
+
   it('records digests, never content', async () => {
     const files = new InMemoryFileSystem();
     await files.write(HOME.join('.zshenv'), 'export SECRET=hunter2\n');

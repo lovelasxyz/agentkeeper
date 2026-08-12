@@ -34,7 +34,20 @@ export class BaselineCollector {
 
   /** The concrete files zone B watches on this platform. */
   targets(context: PathContext): readonly AbsolutePath[] {
-    const found = new Map<string, AbsolutePath>();
+    return this.targetScopes(context).map((scope) => scope.anchor);
+  }
+
+  /**
+   * Each watched anchor with the test that decides what belongs to it.
+   *
+   * The anchor of `~/.claude/settings*.json` is the whole `~/.claude`
+   * directory, which holds thousands of session files. Collecting all of them
+   * exceeded the listing limit and failed activation outright, and would have
+   * baselined files that change every few minutes — a tamper signal that
+   * screams constantly is the same as no signal.
+   */
+  private targetScopes(context: PathContext): readonly TargetScope[] {
+    const found = new Map<string, TargetScope>();
 
     for (const entry of this.registry.forPlatform(context.platform)) {
       if (entry.category !== 'persistence' && !PERSISTENCE_COMPANION_IDS.has(entry.id)) continue;
@@ -54,11 +67,16 @@ export class BaselineCollector {
           'shims',
         ]) {
           const target = context.home.join('.agentkeeper', relative);
-          found.set(target.value, target);
+          // Checksum-managed code and configuration: every file under these
+          // belongs to the baseline.
+          found.set(target.value, { anchor: target, covers: () => true });
         }
         continue;
       }
-      found.set(anchor.value, anchor);
+      found.set(anchor.value, {
+        anchor,
+        covers: (path) => entry.matches(path, context),
+      });
     }
     return [...found.values()];
   }
@@ -94,22 +112,25 @@ export class BaselineCollector {
 
   async collect(context: PathContext): Promise<readonly BaselineEntry[]> {
     const inspected = await mapWithConcurrency(
-      this.targets(context),
+      this.targetScopes(context),
       BASELINE_IO_CONCURRENCY,
-      async (target) => ({ target, info: await this.files.stat(target) }),
+      async (scope) => ({ scope, info: await this.files.stat(scope.anchor) }),
     );
     const expanded = await mapWithConcurrency(
       inspected,
       BASELINE_IO_CONCURRENCY,
-      async ({ target, info }): Promise<readonly AbsolutePath[]> => {
+      async ({ scope, info }): Promise<readonly AbsolutePath[]> => {
         if (info === null) return [];
-        if (!info.isDirectory) return [target];
+        if (!info.isDirectory) return [scope.anchor];
         try {
-          return await this.files.list(target, {
+          return await this.files.list(scope.anchor, {
             maxEntries: 2_000,
             maxDepth: 8,
             failOnLimit: true,
             failOnError: true,
+            // Only what the sensitive pattern actually names. Without this the
+            // anchor of a file glob drags its whole directory into the baseline.
+            includeFile: (path) => scope.covers(path),
           });
         } catch (error) {
           // A surface this process may never read — `/private/var/at/tabs`
@@ -142,4 +163,10 @@ export class BaselineCollector {
 function isPermissionDenied(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === 'EACCES' || code === 'EPERM';
+}
+
+/** A watched anchor and the test for what inside it belongs to the baseline. */
+interface TargetScope {
+  readonly anchor: AbsolutePath;
+  readonly covers: (path: AbsolutePath) => boolean;
 }

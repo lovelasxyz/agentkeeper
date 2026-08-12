@@ -164,22 +164,12 @@ describe('the wrapper is transparent to signals (spec §4.6)', () => {
       child.once('exit', (exitCode) => resolve(exitCode ?? -1));
     });
 
-    if (process.platform === 'darwin') {
-      // Seatbelt `exec`s the command, so the sandboxed process *is* the one we
-      // signalled: the handler runs and its exit code comes back out.
-      expect(existsSync(marker)).toBe(true);
-      expect(code).toBe(42);
-      return;
-    }
-
-    // Linux cannot deliver the signal gracefully today, and pretending
-    // otherwise is worse than the gap. bubblewrap forks rather than execs, and
-    // `--new-session` (which is what stops the agent injecting keystrokes into
-    // your terminal) puts the sandbox in its own session, so a SIGTERM aimed at
-    // bwrap never reaches the command. The tree still dies immediately through
-    // `--die-with-parent` — termination is guaranteed, a clean shutdown is not.
-    // Closing this needs an in-namespace forwarder; see docs/agent-compatibility.md.
-    expect(existsSync(marker)).toBe(false);
-    expect(code).not.toBe(0);
+    // The child chose 42 on receiving the signal, and the wrapper passed that
+    // through: proof the signal reached the real process and its exit code came
+    // back out. Seatbelt `exec`s the command, so it *is* the process we
+    // signalled; bubblewrap forks into a new session, so the runner also
+    // delivers the signal to the sandboxed process itself.
+    expect(existsSync(marker), 'the sandboxed process never ran its handler').toBe(true);
+    expect(code).toBe(42);
   });
 });

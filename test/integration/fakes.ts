@@ -87,7 +87,19 @@ export class InMemoryFileSystem implements FileSystem {
       .filter((key) => key.startsWith(`${root.value}/`))
       .map((key) => AbsolutePath.of(key))
       .filter((path) => _options?.includeFile?.(path) !== false);
-    return _options?.maxEntries === undefined ? found : found.slice(0, _options.maxEntries);
+    if (_options?.maxEntries !== undefined && found.length > _options.maxEntries) {
+      // Real listings refuse a partial answer rather than truncating one, and
+      // the fake hid that: a directory over the limit crashed activation in
+      // production while every test passed.
+      if (_options.failOnLimit === true) {
+        throw new Error(
+          `Refusing a partial filesystem result for ${root.value}: entries limit ` +
+            `${_options.maxEntries} was reached`,
+        );
+      }
+      return found.slice(0, _options.maxEntries);
+    }
+    return found;
   }
 
   realPath(path: AbsolutePath): AbsolutePath {

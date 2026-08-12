@@ -238,15 +238,14 @@ class ActiveNodeWatchSession implements WatchSession {
       watcher.on('error', (error) => {
         watcher.close();
         this.registrations.delete(directory.value);
-        const reason = `${directory.value} watcher failed: ${error.message}`;
-        this.issues.add(reason);
-        this.reportFault(directory, reason);
+        this.recordIssue(directory, `${directory.value} watcher failed: ${error.message}`);
       });
       return true;
     } catch (cause) {
-      const reason = `${directory.value} could not be watched: ${message(cause)}`;
-      this.issues.add(reason);
-      this.reportFault(directory, reason);
+      // Through `recordIssue`, not `reportFault`: a refresh retries every
+      // uncovered directory, so reporting per attempt turns a permanently
+      // unreadable surface into an endless stream of identical log lines.
+      this.recordIssue(directory, `${directory.value} could not be watched: ${message(cause)}`);
       return false;
     }
   }

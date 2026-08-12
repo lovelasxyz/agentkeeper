@@ -29,7 +29,7 @@
 
 namespace {
 
-constexpr std::uint32_t kRequestVersion = 2;
+constexpr std::uint32_t kRequestVersion = 3;
 constexpr std::size_t kMaximumRequestBytes = 16U * 1024U * 1024U;
 constexpr std::uint32_t kMaximumItems = 100000U;
 constexpr char kRequestMagic[] = "AKSBOX01";
@@ -42,6 +42,8 @@ constexpr int kJobFailed = 204;
 constexpr int kProcessFailed = 205;
 constexpr int kCleanupFailed = 206;
 constexpr int kWaitFailed = 207;
+// A launcher probe bounds its run; a hung child is reported, never waited on.
+constexpr int kChildTimedOut = 208;
 
 std::atomic<HANDLE> g_job{nullptr};
 
@@ -62,6 +64,8 @@ struct DeniedResource {
 };
 
 struct Request {
+  /** Milliseconds the child may run; 0 means an unbounded agent session. */
+  std::uint32_t timeout_ms = 0;
   std::wstring executable;
   std::wstring cwd;
   std::vector<std::wstring> args;
@@ -292,6 +296,7 @@ bool ReadRequestFile(const std::wstring& path, Request* request) {
   if (!reader.Bytes(8, &magic) ||
       !std::equal(magic, magic + 8, reinterpret_cast<const std::uint8_t*>(kRequestMagic)) ||
       !reader.Uint32(&version) || version != kRequestVersion ||
+      !reader.Uint32(&request->timeout_ms) ||
       !reader.String(&request->executable) || !reader.String(&request->cwd) ||
       !reader.Strings(&request->args) || !reader.Resources(&request->reads) ||
       !reader.Resources(&request->writes) ||
@@ -647,7 +652,19 @@ int Launch(const std::wstring& request_path) {
     return cleaned ? kProcessFailed : kCleanupFailed;
   }
 
-  const DWORD waited = WaitForSingleObject(process_handle.get(), INFINITE);
+  // Zero means "as long as the user needs": an agent session has no deadline.
+  // A probe supplies one, so a child that never exits is reported instead of
+  // holding the launcher — and the tree is reclaimed here, by the process that
+  // owns the Job, rather than left for someone else to notice.
+  const DWORD budget = request.timeout_ms == 0 ? INFINITE : request.timeout_ms;
+  const DWORD waited = WaitForSingleObject(process_handle.get(), budget);
+  if (waited == WAIT_TIMEOUT) {
+    TerminateAndDrainJob(job.get(), ERROR_TIMEOUT);
+    g_job.store(nullptr);
+    SetConsoleCtrlHandler(ConsoleControlHandler, FALSE);
+    const bool timed_out_cleaned = Cleanup(applied_changes, sid.get(), profile_name);
+    return timed_out_cleaned ? kChildTimedOut : kCleanupFailed;
+  }
   DWORD child_exit = 1;
   const bool observed =
       waited == WAIT_OBJECT_0 && GetExitCodeProcess(process_handle.get(), &child_exit) != FALSE;

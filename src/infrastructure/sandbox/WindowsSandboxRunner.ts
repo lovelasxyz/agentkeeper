@@ -23,7 +23,7 @@ import { WindowsPolicyTranslator } from './WindowsPolicyTranslator.js';
 /** Creating and deleting one AppContainer profile is fast; anything slower is stuck. */
 const PREFLIGHT_TIMEOUT_MS = 15_000;
 const REQUEST_MAGIC = Buffer.from('AKSBOX01', 'ascii');
-const REQUEST_VERSION = 2;
+const REQUEST_VERSION = 3;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const MAX_COLLECTION_ITEMS = 100_000;
 const NATIVE_ERROR_CODES = Object.freeze({
@@ -35,6 +35,7 @@ const NATIVE_ERROR_CODES = Object.freeze({
   205: 'windows.process-launch-failed',
   206: 'windows.cleanup-failed',
   207: 'windows.child-wait-failed',
+  208: 'windows.child-timed-out',
 } as const);
 
 type NativeErrorExitCode = keyof typeof NATIVE_ERROR_CODES;
@@ -98,6 +99,14 @@ export interface WindowsEncodedResource {
 }
 
 export interface WindowsSandboxRequest {
+  /**
+   * Milliseconds the confined child may run before the helper reclaims it.
+   *
+   * Omitted for an agent session, which has no deadline. A probe supplies one
+   * so a child that never exits is reported as `windows.child-timed-out` by the
+   * process that owns the Job Object, instead of holding the launcher forever.
+   */
+  readonly timeoutMs?: number;
   readonly executable: string;
   readonly cwd: string;
   readonly args: readonly string[];
@@ -249,6 +258,9 @@ export class WindowsSandboxRunner implements SandboxRunner {
         throw error;
       }
       const request: WindowsSandboxRequest = {
+        // The helper owns the Job Object, so it is the only process that can
+        // reclaim a stuck AppContainer tree. A probe hands it the deadline.
+        ...(command.deadlineMs === undefined ? {} : { timeoutMs: command.deadlineMs }),
         executable: command.executable,
         cwd: command.cwd.value,
         args: [...command.args],
@@ -327,6 +339,8 @@ export function encodeWindowsSandboxRequest(request: WindowsSandboxRequest): Buf
   const writer = new BinaryWriter();
   writer.bytes(REQUEST_MAGIC);
   writer.uint32(REQUEST_VERSION);
+  // 0 means no deadline: an agent session runs for as long as the user needs.
+  writer.uint32(request.timeoutMs ?? 0);
   writer.string(request.executable);
   writer.string(request.cwd);
   writer.strings(request.args);
@@ -350,7 +364,9 @@ export function decodeWindowsSandboxRequest(content: Buffer): WindowsSandboxRequ
   if (reader.uint32() !== REQUEST_VERSION) {
     throw new Error('Unsupported Windows sandbox request version');
   }
+  const timeoutMs = reader.uint32();
   const request: WindowsSandboxRequest = {
+    ...(timeoutMs === 0 ? {} : { timeoutMs }),
     executable: reader.string(),
     cwd: reader.string(),
     args: reader.strings(),
@@ -482,6 +498,9 @@ function nativeErrorMessage(code: WindowsSandboxErrorCode): string {
     'windows.cleanup-failed':
       'The native launcher could not remove every temporary AppContainer capability.',
     'windows.child-wait-failed': 'The native launcher could not observe the confined child exit.',
+    'windows.child-timed-out':
+      'The confined child did not exit within the probe deadline; the launcher terminated its ' +
+      'Job Object and reclaimed the AppContainer profile.',
     'windows.policy-discovery-failed':
       'The Windows policy compiler could not resolve every read-only deny rule safely.',
   };

@@ -92,6 +92,15 @@ describe('integration status is derived from what exists, not from intent', () =
     expect(classifyIntegration({ agent: 'claude', ...input })).toBe(expected);
   });
 
+  it('never claims every agent is covered while one still needs repair', () => {
+    const lines = renderIntegrations([
+      { agent: 'claude', executable: '/usr/bin/claude', shimPresent: true, managedHealthy: false },
+    ]).join('\n');
+
+    expect(lines).toMatch(/needs repair/);
+    expect(lines).not.toMatch(/Every agent/);
+  });
+
   it('names the unprotected agent in its output rather than only counting', () => {
     const lines = renderIntegrations([
       { agent: 'claude', executable: '/usr/bin/claude', shimPresent: true, managedHealthy: true },
@@ -132,5 +141,35 @@ describe('policy output', () => {
     });
 
     expect(renderPolicy(policy, home).join('\n')).toMatch(/no outbound|denied/i);
+  });
+});
+
+describe('a resident watcher that could never start', () => {
+  it('is named at activation instead of flapping silently', async () => {
+    // macOS TCC denies background agents access to Desktop, Documents and
+    // Downloads. launchd registers the job, the job cannot read its own
+    // entrypoint, and it respawns forever with no explanation anywhere.
+    const { backgroundLaunchWarning } = await import(
+      '../../../src/presentation/cli/commands/InstallationCommand.js'
+    );
+    const home = AbsolutePath.of('/Users/dev');
+
+    expect(
+      backgroundLaunchWarning(home.join('Desktop/agentkeeper/dist/cli.js'), home, 'darwin'),
+    ).toMatch(/Desktop/);
+    expect(
+      backgroundLaunchWarning(home.join('Documents/x/dist/cli.js'), home, 'darwin'),
+    ).not.toBeNull();
+    expect(
+      backgroundLaunchWarning(
+        home.join('.nvm/versions/node/v22/lib/node_modules/agentkeeper/dist/cli.js'),
+        home,
+        'darwin',
+      ),
+    ).toBeNull();
+    // Only macOS enforces this, so no other platform is warned.
+    expect(
+      backgroundLaunchWarning(home.join('Desktop/agentkeeper/dist/cli.js'), home, 'linux'),
+    ).toBeNull();
   });
 });

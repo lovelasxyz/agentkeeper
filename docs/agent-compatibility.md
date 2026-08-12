@@ -56,26 +56,29 @@ command never passes through a `PreToolUse` hook at all.
 | Property | Guarantee |
 |---|---|
 | TTY | Preserved — interactive prompts, colours and progress rendering work |
-| Signals | macOS delivers `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT` to the agent itself. On Linux and Windows the sandbox is **terminated as a tree** instead — see below. |
+| Signals | macOS and Linux deliver `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT` to the agent itself, so it can shut down cleanly. On Windows the Job Object terminates the tree — see below. |
 | Exit code | Passed through unchanged |
 | stdout/stderr | Not buffered or rewritten by agentkeeper |
 
-### Signals on Linux: a known gap
+### How signals reach the agent
 
-`sandbox-exec` **execs** the command, so on macOS the process you signal is the
-agent, and its handler runs normally.
+`sandbox-exec` **execs** the command, so on macOS the process you signal *is*
+the agent and its handler runs normally.
 
 bubblewrap **forks** instead, and `--new-session` — the flag that stops a
 compromised agent injecting keystrokes into your terminal — puts the sandbox in
-its own session. A `SIGTERM` aimed at `bwrap` therefore never reaches the
-command. The process tree still dies immediately via `--die-with-parent`, so
-Ctrl-C always stops the agent; what it does not get is the chance to shut down
-cleanly and save state.
+its own session, so a signal aimed at `bwrap` alone never reaches the command.
+The launcher therefore delivers it to the confined process directly: a nested
+PID namespace is still fully visible from the host, so the process `bwrap`
+started is signalled by PID as well. Dropping `--new-session` would have fixed
+signals by removing a real protection, which is the wrong trade.
 
-Closing this needs a forwarder running as PID 1 inside the namespace with a
-control channel from outside. Dropping `--new-session` would fix signals by
-removing a real protection, which is the wrong trade. On Windows the Job Object
-terminates the tree for the same practical result.
+One consequence is worth knowing: a process that is PID 1 in its namespace only
+receives signals it has installed a handler for. Agents install handlers; a bare
+`sleep` would not, and would be terminated with the tree instead.
+
+On Windows the Job Object terminates the tree, which stops the agent but gives
+it no chance to shut down cleanly.
 
 ## An agent's own sandbox
 

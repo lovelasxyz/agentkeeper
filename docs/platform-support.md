@@ -83,6 +83,14 @@ compatibility surface, and because network egress stays denied: an AppContainer
 cannot reach a loopback broker without an exemption this project does not grant.
 Requested destinations are refused rather than silently opened.
 
+**No console, and no terminal output yet.** An AppContainer token cannot open
+the launcher's console, and a child attached to one started but never exited.
+The confined process is therefore detached and receives the null device on all
+three standard handles, bounded by an explicit inheritance list rather than
+blanket inheritance. That makes the boundary work; it also means a Windows
+session currently produces no terminal output. Interactive Windows support is
+post-1.0 and needs handles the AppContainer token may actually use.
+
 Nothing is compiled on the user's machine, and nothing is downloaded at
 install time. The release gate refuses to publish a tarball that does not
 contain both helper binaries.

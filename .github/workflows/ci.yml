@@ -85,7 +85,22 @@ jobs:
       - name: Sandbox isolation tests (Windows, not yet a release gate)
         if: runner.os == 'Windows'
         continue-on-error: true
-        run: npm run test:sandbox
+        shell: pwsh
+        # The verdict goes to the run summary, not only into a step nobody
+        # expands. Debugging a platform you do not own means the answer has to
+        # arrive without asking anyone to dig through the raw log.
+        run: |
+          $output = npm run test:sandbox 2>&1 | Out-String
+          Write-Output $output
+          $tail = ($output -split "`n" | Select-Object -Last 40) -join "`n"
+          @(
+            '### Windows sandbox suite — reported, not gating',
+            '',
+            '```',
+            $tail.TrimEnd(),
+            '```'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: End-to-end install lifecycle
         if: runner.os != 'Windows'

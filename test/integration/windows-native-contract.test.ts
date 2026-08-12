@@ -25,9 +25,16 @@ describe('Windows native isolation contract (portable source audit)', () => {
     expect(source).not.toMatch(/ShellExecute|WinExec|\bsystem\s*\(/);
   });
 
-  it('closes broad handle inheritance and grants no network capability', () => {
+  it('bounds handle inheritance to the null device and grants no network capability', () => {
+    // `FALSE` left the child with no valid standard handles and attached to a
+    // console its AppContainer token cannot open, which is why it started and
+    // never exited. An explicit handle list is stricter: exactly one handle
+    // crosses, whatever else the launcher holds.
+    expect(source).toMatch(/PROC_THREAD_ATTRIBUTE_HANDLE_LIST/);
+    expect(source).toMatch(/CreateFileW\(\s*L"NUL"/);
+    expect(source).toMatch(/STARTF_USESTDHANDLES/);
     expect(source).toMatch(
-      /CreateProcessW\([\s\S]*?nullptr, nullptr, FALSE,[\s\S]*?EXTENDED_STARTUPINFO_PRESENT/,
+      /CreateProcessW\([\s\S]*?nullptr, nullptr, TRUE,[\s\S]*?DETACHED_PROCESS/,
     );
     expect(source).toMatch(/capabilities\.Capabilities\s*=\s*nullptr/);
     expect(source).toMatch(/capabilities\.CapabilityCount\s*=\s*0/);

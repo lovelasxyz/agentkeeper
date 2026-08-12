@@ -163,6 +163,19 @@ class AttributeList {
                capabilities, sizeof(*capabilities), nullptr, nullptr) != FALSE;
   }
 
+  /**
+   * Restricts inheritance to exactly these handles.
+   *
+   * Stricter than `bInheritHandles = FALSE`, not looser: with an explicit list
+   * the child receives these and nothing else, however many inheritable
+   * handles the launcher happens to hold.
+   */
+  bool SetInheritedHandles(HANDLE* handles, DWORD count) {
+    return UpdateProcThreadAttribute(
+               list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+               count * sizeof(HANDLE), nullptr, nullptr) != FALSE;
+  }
+
   LPPROC_THREAD_ATTRIBUTE_LIST get() const { return list_; }
 
  private:
@@ -596,25 +609,47 @@ int Launch(const std::wstring& request_path) {
   capabilities.CapabilityCount = 0;
   capabilities.Reserved = 0;
 
+  // An AppContainer token cannot open the launcher's console: attaching to it
+  // is what left the child alive and never exiting. It gets the null device on
+  // all three standard handles and no console of its own, so nothing it writes
+  // can block on a resource its token may not reach.
+  SECURITY_ATTRIBUTES inheritable{};
+  inheritable.nLength = sizeof(inheritable);
+  inheritable.bInheritHandle = TRUE;
+  Handle null_device(CreateFileW(
+      L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+      &inheritable, OPEN_EXISTING, 0, nullptr));
+  if (null_device.get() == INVALID_HANDLE_VALUE || null_device.get() == nullptr) {
+    const bool cleaned = Cleanup(applied_changes, sid.get(), profile_name);
+    return cleaned ? kProcessFailed : kCleanupFailed;
+  }
+  HANDLE inherited[] = {null_device.get()};
+
   AttributeList attributes;
-  if (!attributes.Initialise(1) || !attributes.SetSecurityCapabilities(&capabilities)) {
+  if (!attributes.Initialise(2) || !attributes.SetSecurityCapabilities(&capabilities) ||
+      !attributes.SetInheritedHandles(inherited, 1)) {
     const bool cleaned = Cleanup(applied_changes, sid.get(), profile_name);
     return cleaned ? kProcessFailed : kCleanupFailed;
   }
 
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = null_device.get();
+  startup.StartupInfo.hStdOutput = null_device.get();
+  startup.StartupInfo.hStdError = null_device.get();
   startup.lpAttributeList = attributes.get();
   PROCESS_INFORMATION process{};
   std::vector<wchar_t> command_line = CommandLine(request);
 
-  // FALSE is a security invariant: the child receives no launcher handles.
-  // Console attachment is inherited by the Windows process model, not by a
-  // broad HANDLE inheritance set.
+  // Inheritance is TRUE but bounded by PROC_THREAD_ATTRIBUTE_HANDLE_LIST above:
+  // the child receives the null device and nothing else. That is a stronger
+  // guarantee than FALSE, which left it with no valid standard handles at all.
+  // DETACHED_PROCESS keeps it off the launcher's console for the same reason.
   const BOOL created = CreateProcessW(
-      request.executable.c_str(), command_line.data(), nullptr, nullptr, FALSE,
+      request.executable.c_str(), command_line.data(), nullptr, nullptr, TRUE,
       CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT |
-          EXTENDED_STARTUPINFO_PRESENT,
+          EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS,
       nullptr, request.cwd.c_str(), &startup.StartupInfo, &process);
   if (created == FALSE) {
     const bool cleaned = Cleanup(applied_changes, sid.get(), profile_name);

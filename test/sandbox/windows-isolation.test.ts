@@ -102,6 +102,9 @@ describeOnWindows('isolation actually isolates (Windows / AppContainer)', () => 
           ],
           cwd: workspace,
           env: windowsEnvironment(),
+          // The helper owns the Job Object, so it reclaims a stuck child
+          // itself rather than leaving the suite to time out around it.
+          deadlineMs: 20_000,
         },
       );
 

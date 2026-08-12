@@ -71,8 +71,10 @@ describe('build and CI portability', () => {
     // Exactly one step may be non-blocking, and it must be the Windows one.
     const nonBlocking = workflow.match(/continue-on-error: true/g) ?? [];
     expect(nonBlocking).toHaveLength(1);
+    // `\s+` rather than `\n`: a Windows checkout delivers CRLF, and asserting
+    // on the separator would fail on the very platform this step describes.
     expect(workflow).toMatch(
-      /Sandbox isolation tests \(Windows[^\n]*\n\s+if: runner\.os == 'Windows'\n\s+continue-on-error: true/,
+      /Sandbox isolation tests \(Windows[^\r\n]*\s+if: runner\.os == 'Windows'\s+continue-on-error: true/,
     );
   });
 

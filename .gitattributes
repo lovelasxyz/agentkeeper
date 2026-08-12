@@ -1,0 +1,16 @@
+# Normalise line endings in the repository and on every checkout.
+#
+# Without this, a Windows clone receives CRLF and two things break that are
+# easy to misread as product faults: assertions that read workflow or script
+# text fail only on Windows, and a shell script written with CRLF is rejected
+# by the kernel with a confusing "bad interpreter" error.
+#
+# Generated artifacts decide their own line endings at runtime — the PowerShell
+# shim is emitted with CRLF by the installer, which is unaffected by this file.
+* text=auto eol=lf
+
+# Binary, never touched.
+*.exe binary
+*.obj binary
+*.png binary
+*.ico binary

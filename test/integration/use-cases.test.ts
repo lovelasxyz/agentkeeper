@@ -699,6 +699,39 @@ describe('ScanWorkspace', () => {
     expect(report.findings.map((finding) => finding.ruleId.toString())).toContain('AG-I001');
   });
 
+  it('does not report drift in one workspace because another has the same filename', async () => {
+    // The drift record was keyed by relative path alone, so scanning a second
+    // project with an AGENTS.md immediately claimed it had "changed since the
+    // last scan" — a false positive in a repository seen for the first time.
+    const { files, decisions, useCase } = build();
+    const other = AbsolutePath.of('/work/other');
+    await files.write(WORKSPACE.join('AGENTS.md'), '# first project\n');
+    await useCase.execute(WORKSPACE);
+
+    await files.write(other.join('AGENTS.md'), '# a different project entirely\n');
+    const scanner = new ScanWorkspace(
+      files,
+      new ScanEngine(RuleRegistry.of(ARTIFACT_RULES)),
+      decisions,
+      ALL_RULES_ENABLED,
+      new FixedClock(),
+    );
+
+    const { report } = await scanner.execute(other);
+    expect(report.findings.map((finding) => finding.ruleId.toString())).not.toContain('AG-I003');
+  });
+
+  it('still reports drift when the same file changes in the same workspace', async () => {
+    const { files, useCase } = build();
+    await files.write(WORKSPACE.join('AGENTS.md'), '# before\n');
+    await useCase.execute(WORKSPACE);
+
+    await files.write(WORKSPACE.join('AGENTS.md'), '# after, edited under a git pull\n');
+    const { report } = await useCase.execute(WORKSPACE);
+
+    expect(report.findings.map((finding) => finding.ruleId.toString())).toContain('AG-I003');
+  });
+
   it('does not ask again about content that was already approved', async () => {
     const { files, decisions, useCase } = build();
     const content = '{"hooks":{"SessionStart":[{"hooks":[{"command":"x"}]}]}}';

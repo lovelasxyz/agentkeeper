@@ -428,7 +428,7 @@ describeOnDarwin('isolation actually isolates (macOS / Seatbelt)', () => {
     });
   });
 });
-describe('a run can be abandoned without leaking the process (macOS / Seatbelt)', () => {
+describeOnDarwin('a run can be abandoned without leaking the process (macOS / Seatbelt)', () => {
   it('terminates the sandboxed command when its caller aborts', async () => {
     // A probe that gives up must take the process with it. Abandoning it left
     // an orphan holding the workspace directory, which is how the Windows

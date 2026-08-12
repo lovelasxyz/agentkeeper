@@ -1,6 +1,7 @@
 import { Artifact } from '../../domain/entities/Artifact.js';
 import { ScanReport } from '../../domain/entities/ScanReport.js';
 import { ContentHash } from '../../domain/value-objects/ContentHash.js';
+import { WorkspaceId } from '../../domain/value-objects/WorkspaceId.js';
 import type { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 import type { ScanEngine } from '../../domain/services/ScanEngine.js';
 import type { RuleSwitches } from '../../domain/rules/RuleRegistry.js';
@@ -104,7 +105,7 @@ export class ScanWorkspace {
           path,
           workspace,
           content,
-          previousHash: previousHash(decisions.get(`drift:${relative}`)),
+          previousHash: previousHash(decisions.get(driftKey(workspace, relative))),
         });
       },
     );
@@ -112,7 +113,7 @@ export class ScanWorkspace {
 
     const report = this.engine.scan(artifacts, this.switches);
     const filtered = this.applyDecisions(report, decisions);
-    await this.recordArtifactHashes(artifacts);
+    await this.recordArtifactHashes(workspace, artifacts);
     return { report: filtered, filesInspected: artifacts.length };
   }
 
@@ -135,14 +136,17 @@ export class ScanWorkspace {
    * means the next content hash is compared with what was actually inspected,
    * while durable allow/deny decisions remain tied to their own decision keys.
    */
-  private async recordArtifactHashes(artifacts: readonly Artifact[]): Promise<void> {
+  private async recordArtifactHashes(
+    workspace: AbsolutePath,
+    artifacts: readonly Artifact[],
+  ): Promise<void> {
     const changed = artifacts.filter(
       (artifact) => artifact.previousHash === null || !artifact.previousHash.equals(artifact.hash),
     );
     if (changed.length === 0) return;
     await this.decisions.recordMany(
       changed.map((artifact) => ({
-        key: `drift:${artifact.relativePath}`,
+        key: driftKey(workspace, artifact.relativePath),
         verdict: 'allow' as const,
         subject: artifact.hash.toString(),
         ruleIds: [],
@@ -168,4 +172,16 @@ function previousHash(record: Decision | undefined): ContentHash | null {
 
 function relativeTo(workspace: AbsolutePath, path: AbsolutePath): string {
   return workspace.contains(path) ? path.value.slice(workspace.value.length + 1) : path.value;
+}
+
+/**
+ * Drift is a per-repository fact, so the record is keyed by workspace too.
+ *
+ * Keying by relative path alone made a first-ever scan of a second project
+ * report its `AGENTS.md` as "changed since the last scan", because another
+ * project had one. Old records simply stop matching, which reads as "not seen
+ * before" and reports nothing — the safe direction for a migration.
+ */
+function driftKey(workspace: AbsolutePath, relativePath: string): string {
+  return `drift:${WorkspaceId.fromPath(workspace).toString()}:${relativePath}`;
 }

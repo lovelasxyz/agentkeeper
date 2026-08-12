@@ -45,6 +45,19 @@ describe('build and CI portability', () => {
     expect(readFileSync(join(root, 'src/keep.ts'), 'utf8')).toBe('source');
   });
 
+  it('keeps every workflow trigger key well formed', () => {
+    // A stray second colon makes the key `workflow_dispatch:` rather than the
+    // event, and GitHub then rejects the whole file: the run reports failure
+    // with zero jobs, which reads like a broken build rather than bad YAML.
+    for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
+      const workflow = readFileSync(join(repository, relative), 'utf8');
+      expect(workflow, `${relative} has a malformed key`).not.toMatch(/^\s*[\w-]+::/m);
+    }
+    expect(readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8')).toMatch(
+      /^\s{2}workflow_dispatch:\s*$/m,
+    );
+  });
+
   it('runs the portable verification surface on Windows CI', () => {
     const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8');
 

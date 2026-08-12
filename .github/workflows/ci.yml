@@ -6,7 +6,7 @@ on:
   pull_request:
   # Lets a platform be re-checked from the UI without an empty commit, which
   # matters when the failing OS is not the one on the maintainer's desk.
-  workflow_dispatch::
+  workflow_dispatch:
 
 permissions:
   contents: read

@@ -316,3 +316,30 @@ describe('resident persistence monitor', () => {
     expect(state.audit.events()[0]).toBe('pause.invalid');
   });
 });
+
+describe('watch targets', () => {
+  const collector = new BaselineCollector(
+    new InMemoryFileSystem(),
+    SensitivePathRegistry.default(),
+    new FixedClock(),
+  );
+
+  it('never asks to recurse into an agent session directory', () => {
+    // `~/.claude` is only the anchor of `~/.claude/settings*.json`, yet it holds
+    // thousands of session directories. Recursing into it exhausts the
+    // watcher's handle budget, and every target after it — the other agents'
+    // configuration — silently loses its watch.
+    const targets = collector.watchTargets(CONTEXT);
+    const claude = targets.find((target) => target.path.value.endsWith('/.claude'));
+
+    expect(claude, 'the agent configuration directory is not watched at all').toBeDefined();
+    expect(claude?.recursive).toBe(false);
+  });
+
+  it('still recurses where the control plane needs it', () => {
+    const targets = collector.watchTargets(CONTEXT);
+    const state = targets.find((target) => target.path.value.endsWith('/.agentkeeper'));
+
+    expect(state?.recursive).toBe(true);
+  });
+});

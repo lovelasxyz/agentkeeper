@@ -2,6 +2,7 @@ import { ContentHash } from '../../domain/value-objects/ContentHash.js';
 import type { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 import type { PathContext } from '../../domain/paths/PathContext.js';
 import type { SensitivePathRegistry } from '../../domain/paths/SensitivePathRegistry.js';
+import type { WatchTarget } from '../../infrastructure/watch/NodeWatchService.js';
 import type { BaselineEntry, Clock, FileSystem } from '../../application/ports/index.js';
 import { mapWithConcurrency } from '../../application/services/BoundedConcurrency.js';
 
@@ -69,23 +70,41 @@ export class BaselineCollector {
           const target = context.home.join('.agentkeeper', relative);
           // Checksum-managed code and configuration: every file under these
           // belongs to the baseline.
-          found.set(target.value, { anchor: target, covers: () => true });
+          found.set(target.value, { anchor: target, covers: () => true, recursive: true });
         }
         continue;
       }
+      // Two entries can share an anchor (`~/.ssh/config` and `~/.ssh/**`).
+      // Replacing the scope would silently drop the first one's files, so the
+      // scopes are unioned: covered by either, recursive if either needs it.
+      const existing = found.get(anchor.value);
       found.set(anchor.value, {
         anchor,
-        covers: (path) => entry.matches(path, context),
+        covers:
+          existing === undefined
+            ? (path) => entry.matches(path, context)
+            : (path) => existing.covers(path) || entry.matches(path, context),
+        recursive: (existing?.recursive ?? false) || entry.descendsBelowPrefix(),
       });
     }
     return [...found.values()];
   }
 
-  /** Watch parent state changes, while collection excludes self-mutating files. */
-  watchTargets(context: PathContext): readonly AbsolutePath[] {
+  /**
+   * Watch parent state changes, while collection excludes self-mutating files.
+   *
+   * Each target carries whether the watcher must recurse into it. `~/.claude`
+   * is the anchor of `~/.claude/settings*.json` and holds thousands of session
+   * directories; recursing into it exhausts the watcher's handle budget and
+   * leaves every target registered after it — the other agents' configuration
+   * — with no watch at all.
+   */
+  watchTargets(context: PathContext): readonly WatchTarget[] {
     const stateDir = context.home.join('.agentkeeper');
-    const targets = this.targets(context).filter((target) => !stateDir.contains(target));
-    return [...targets, stateDir];
+    const targets = this.targetScopes(context)
+      .filter((scope) => !stateDir.contains(scope.anchor))
+      .map((scope) => ({ path: scope.anchor, recursive: scope.recursive }));
+    return [...targets, { path: stateDir, recursive: true }];
   }
 
   /**
@@ -169,4 +188,6 @@ function isPermissionDenied(error: unknown): boolean {
 interface TargetScope {
   readonly anchor: AbsolutePath;
   readonly covers: (path: AbsolutePath) => boolean;
+  /** Whether the watcher must recurse below the anchor to see what matters. */
+  readonly recursive: boolean;
 }

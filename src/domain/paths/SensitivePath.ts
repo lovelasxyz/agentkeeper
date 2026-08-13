@@ -86,6 +86,11 @@ export class SensitivePath {
     return this.pattern.literalPrefix(home);
   }
 
+  /** Whether a watcher must recurse below the anchor to cover this entry. */
+  descendsBelowPrefix(): boolean {
+    return this.pattern.descendsBelowPrefix();
+  }
+
   toString(): string {
     return `${this.id} (${this.pattern.raw})`;
   }

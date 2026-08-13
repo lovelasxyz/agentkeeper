@@ -7,6 +7,7 @@ import {
   NodeWatchService,
   type DirectoryWatcher,
   type WatchDirectory,
+  type WatchTarget,
 } from '../../../src/infrastructure/watch/NodeWatchService.js';
 import { AbsolutePath } from '../../../src/domain/value-objects/AbsolutePath.js';
 
@@ -33,14 +34,65 @@ function nextEvent(): {
   return { promise, accept };
 }
 
+/** Most cases here exercise recursive coverage; this keeps them readable. */
+function deep(path: AbsolutePath): WatchTarget {
+  return { path, recursive: true };
+}
+
 describe('NodeWatchService', () => {
+  it('does not spend the handle budget below a target that never asked for it', async () => {
+    // `~/.claude` is the anchor of `~/.claude/settings*.json` and holds
+    // thousands of session directories. Recursing into it exhausted the budget
+    // and left every later target — the other agents' configuration — unwatched.
+    const root = await temporaryRoot();
+    const sessions = root.join('sessions');
+    for (const name of ['a', 'b', 'c', 'd']) {
+      await mkdir(sessions.join(name).value, { recursive: true });
+    }
+    const other = root.join('other');
+    await mkdir(other.value, { recursive: true });
+
+    const driver = new FakeWatchDriver();
+    const started = await new NodeWatchService({
+      watchDirectory: driver.watch,
+      maxDirectories: 3,
+    }).start(
+      [
+        { path: sessions, recursive: false },
+        { path: other, recursive: true },
+      ],
+      () => {},
+      () => {},
+    );
+
+    expect(started.coverage.reasons, started.coverage.reasons.join('\n')).toEqual([]);
+    expect(started.coverage.status).toBe('protected');
+    expect(started.coverage.watchedDirectories).toBe(2);
+    started.session.close();
+  });
+
+  it('still sees files appear directly inside a non-recursive target', async () => {
+    const root = await temporaryRoot();
+    const driver = new FakeWatchDriver();
+    const event = nextEvent();
+    const started = await new NodeWatchService({ watchDirectory: driver.watch }).start(
+      [{ path: root, recursive: false }],
+      (change) => event.accept(change.path?.value ?? null),
+      () => {},
+    );
+
+    driver.change(root, 'rename', 'settings.json');
+    await expect(event.promise).resolves.toBe(root.join('settings.json').value);
+    started.session.close();
+  });
+
   it('watches existing directory trees recursively without native-recursive assumptions', async () => {
     const root = await temporaryRoot();
     await mkdir(root.join('nested/deeper').value, { recursive: true });
     const driver = new FakeWatchDriver();
     const event = nextEvent();
     const started = await new NodeWatchService({ watchDirectory: driver.watch }).start(
-      [root],
+      [deep(root)],
       (change) => event.accept(change.path?.value ?? null),
       () => {},
     );
@@ -58,7 +110,7 @@ describe('NodeWatchService', () => {
     const event = nextEvent();
     const target = root.join('not-created/config.json');
     const started = await new NodeWatchService({ watchDirectory: driver.watch }).start(
-      [target],
+      [deep(target)],
       (change) => event.accept(change.path?.value ?? null),
       () => {},
     );
@@ -79,7 +131,7 @@ describe('NodeWatchService', () => {
     const started = await new NodeWatchService({
       maxDirectories: 2,
       watchDirectory: driver.watch,
-    }).start([root], () => {}, (fault) => faults.push(fault.reason));
+    }).start([deep(root)], () => {}, (fault) => faults.push(fault.reason));
 
     expect(started.coverage.status).toBe('degraded');
     expect(started.coverage.watchedDirectories).toBe(2);
@@ -98,7 +150,7 @@ describe('NodeWatchService', () => {
     };
 
     const started = await new NodeWatchService({ watchDirectory }).start(
-      [root],
+      [deep(root)],
       () => {},
       (fault) => faults.push(fault.reason),
     );
@@ -161,7 +213,7 @@ describe('a surface this process may never watch', () => {
 
     const faults: string[] = [];
     const started = await new NodeWatchService({ watchDirectory }).start(
-      [root],
+      [deep(root)],
       () => undefined,
       (fault) => faults.push(fault.reason),
     );

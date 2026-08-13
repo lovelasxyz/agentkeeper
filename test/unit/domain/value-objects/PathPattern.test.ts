@@ -116,6 +116,30 @@ describe('PathPattern', () => {
     });
   });
 
+  describe('depth below the literal prefix', () => {
+    // A watcher registers one handle per directory under a budget. Recursing
+    // into an anchor that the pattern never reaches below spends that budget
+    // on nothing — and `~/.claude` alone holds thousands of session
+    // directories, which starves every target registered after it.
+    it('does not descend for a single wildcard segment', () => {
+      expect(PathPattern.of('~/.claude/settings*.json').descendsBelowPrefix()).toBe(false);
+      expect(PathPattern.of('~/Library/LaunchAgents/*.plist').descendsBelowPrefix()).toBe(false);
+    });
+
+    it('does not descend for a fully literal pattern', () => {
+      expect(PathPattern.of('~/.netrc').descendsBelowPrefix()).toBe(false);
+    });
+
+    it('descends for a recursive wildcard', () => {
+      expect(PathPattern.of('~/.ssh/**').descendsBelowPrefix()).toBe(true);
+      expect(PathPattern.of('**/.env').descendsBelowPrefix()).toBe(true);
+    });
+
+    it('descends when a wildcard segment is followed by more segments', () => {
+      expect(PathPattern.of('~/.mozilla/firefox/*/logins.json').descendsBelowPrefix()).toBe(true);
+    });
+  });
+
   it('exposes its raw source', () => {
     expect(PathPattern.of('~/.ssh/**').raw).toBe('~/.ssh/**');
   });

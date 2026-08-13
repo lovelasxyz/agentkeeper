@@ -64,6 +64,20 @@ export class PathPattern {
     return base.join(...literal);
   }
 
+  /**
+   * Whether anything this pattern matches can sit deeper than one level below
+   * `literalPrefix`.
+   *
+   * A watcher spends one handle per directory under a fixed budget, so it must
+   * only recurse into an anchor the pattern can actually reach below.
+   */
+  descendsBelowPrefix(): boolean {
+    const firstWildcard = this.segments.findIndex((segment) => segment.includes('*'));
+    if (firstWildcard === -1) return false;
+    const rest = this.segments.slice(firstWildcard);
+    return rest.length > 1 || rest.includes('**');
+  }
+
   toString(): string {
     return this.raw;
   }

@@ -40,6 +40,18 @@ export interface NodeWatchServiceOptions {
   readonly watchDirectory?: WatchDirectory;
 }
 
+/**
+ * A directory (or file) to watch, and whether coverage must reach below it.
+ *
+ * Recursion is opt-in because handles are budgeted: an anchor whose pattern
+ * never matches below one level would spend the whole budget on session data
+ * and starve every target registered after it.
+ */
+export interface WatchTarget {
+  readonly path: AbsolutePath;
+  readonly recursive: boolean;
+}
+
 export type WatchChangeHandler = (event: WatchEvent) => void;
 export type WatchFaultHandler = (fault: WatchFault) => void;
 
@@ -77,12 +89,12 @@ export class NodeWatchService {
   }
 
   async start(
-    targets: readonly AbsolutePath[],
+    targets: readonly WatchTarget[],
     onChange: WatchChangeHandler,
     onFault: WatchFaultHandler,
   ): Promise<WatchStartResult> {
     const session = new ActiveNodeWatchSession(
-      uniquePaths(targets),
+      uniqueTargets(targets),
       this.maxDirectories,
       this.persistent,
       this.watchDirectory,
@@ -107,7 +119,7 @@ class ActiveNodeWatchSession implements WatchSession {
   private readonly refresh: SingleFlightScheduler;
 
   constructor(
-    private readonly targets: readonly AbsolutePath[],
+    private readonly targets: readonly WatchTarget[],
     private readonly maxDirectories: number,
     private readonly persistent: boolean,
     private readonly watchDirectory: WatchDirectory,
@@ -118,7 +130,7 @@ class ActiveNodeWatchSession implements WatchSession {
       async () => this.refreshCoverage(),
       async (error) =>
         this.reportFault(
-          this.targets[0] ?? AbsolutePath.of('/'),
+          this.targets[0]?.path ?? AbsolutePath.of('/'),
           `watch refresh failed: ${error.message}`,
         ),
     );
@@ -163,27 +175,31 @@ class ActiveNodeWatchSession implements WatchSession {
     for (const target of this.targets) await this.expandTarget(target, false);
   }
 
-  private async expandTarget(target: AbsolutePath, initial: boolean): Promise<void> {
-    const targetKind = await pathKind(target);
+  private async expandTarget(target: WatchTarget, initial: boolean): Promise<void> {
+    const { path, recursive } = target;
+    const targetKind = await pathKind(path);
     if (targetKind === 'directory') {
-      await this.expandDirectory(target, target);
+      // A non-recursive target still needs its own directory watched: that is
+      // where creations and renames of the files it covers are observed.
+      if (recursive) await this.expandDirectory(path, path);
+      else this.register(path, path);
       return;
     }
     if (targetKind === 'file') {
-      this.register(target.parent, target);
+      this.register(path.parent, path);
       return;
     }
 
-    const ancestor = await closestExistingDirectory(target.parent);
+    const ancestor = await closestExistingDirectory(path.parent);
     if (ancestor === null) {
-      const reason = `${target.value} cannot be watched: no readable ancestor exists`;
+      const reason = `${path.value} cannot be watched: no readable ancestor exists`;
       this.issues.add(reason);
-      if (!initial) this.reportFault(target, reason);
+      if (!initial) this.reportFault(path, reason);
       return;
     }
-    const reason = `${target.value} does not exist; watching ancestor ${ancestor.value}`;
+    const reason = `${path.value} does not exist; watching ancestor ${ancestor.value}`;
     this.issues.add(reason);
-    this.register(ancestor, target);
+    this.register(ancestor, path);
   }
 
   private async expandDirectory(directory: AbsolutePath, scope: AbsolutePath): Promise<void> {
@@ -328,8 +344,18 @@ function isRelevantToAnyScope(path: AbsolutePath, scopes: ReadonlySet<string>): 
   return false;
 }
 
-function uniquePaths(paths: readonly AbsolutePath[]): readonly AbsolutePath[] {
-  return [...new Map(paths.map((path) => [path.value, path])).values()];
+function uniqueTargets(targets: readonly WatchTarget[]): readonly WatchTarget[] {
+  const merged = new Map<string, WatchTarget>();
+  for (const target of targets) {
+    const existing = merged.get(target.path.value);
+    // The same path can arrive twice with different intents. Recursion wins:
+    // dropping it would leave the deeper entry that asked for it uncovered.
+    merged.set(target.path.value, {
+      path: target.path,
+      recursive: (existing?.recursive ?? false) || target.recursive,
+    });
+  }
+  return [...merged.values()];
 }
 
 function message(cause: unknown): string {

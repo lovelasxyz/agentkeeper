@@ -13,6 +13,19 @@
   `/etc` symlink, through the `/System/Volumes/Data` firmlink, and from a child
   process. Found by attacking the shipped package, not by reading the tests.
 
+- **The drift watcher stopped watching the agent configuration it exists to
+  watch.** `~/.claude` is only the anchor of `~/.claude/settings*.json`, but the
+  watcher recursed into it — and it holds thousands of session directories. That
+  exhausted the 512-handle budget, so every target registered afterwards, the
+  other agents' configuration among them, silently received no watch at all.
+  Recursion is now requested by patterns that actually reach below their anchor.
+  On the reporting machine `~/.gemini/settings.json` went from
+  `recursive coverage exceeded` to genuinely watched, with no budget exhaustion
+  left in the daemon's coverage report. Found in the audit log of a live
+  install.
+- Two registry entries sharing an anchor no longer replace each other's scope,
+  which had silently dropped the first one's files from the baseline.
+
 ### Changed
 
 - The Windows launcher is unchanged from 1.0.2. Detaching the AppContainer

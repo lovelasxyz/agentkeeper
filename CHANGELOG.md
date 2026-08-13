@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.0.3
+
+### Fixed
+
+- **The machine keychain left with the agent (macOS).** `/Library/Keychains`
+  sits outside the home directory, where the Seatbelt profile still permits
+  broad reads, and `System.keychain` is world-readable — so a confined agent
+  could copy the machine's Wi-Fi and 802.1X secrets and its certificate store
+  and attack them offline. It and the SSH host keys under `/private/etc/ssh`
+  are now tier 2 denies, verified against a live sandbox directly, through the
+  `/etc` symlink, through the `/System/Volumes/Data` firmlink, and from a child
+  process. Found by attacking the shipped package, not by reading the tests.
+
+### Changed
+
+- The Windows launcher is unchanged from 1.0.2. Detaching the AppContainer
+  child was tried and did not move the canary, so the guess was reverted rather
+  than shipped; see `docs/platform-support.md`.
+
+## 1.0.2
+
+### Fixed
+
+- Signals reach the confined process instead of only the sandbox helper, so
+  Ctrl-C ends the agent rather than orphaning it. On Linux the whole confined
+  tree is signalled and given a grace period before bubblewrap is torn down.
+
+## 1.0.1
+
+### Fixed
+
+- The CLI reported a placeholder version; the published version is now injected
+  at build time.
+- Abandoned sandboxed runs are terminated, and drift records are scoped to the
+  workspace that produced them.
+- Releases publish over OIDC without a stored credential.
+
 ## 1.0.0
 
 First public release.

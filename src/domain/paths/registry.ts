@@ -136,7 +136,34 @@ export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
     onRead: 'block',
     onWrite: 'block',
     platforms: MAC,
-    rationale: 'The system credential store; everything the user ever saved lives here.',
+    rationale: "The user's credential store; everything they ever saved lives here.",
+  },
+  {
+    // Outside the home directory, where the macOS profile still permits broad
+    // reads. The file is world-readable by default, so nothing but this rule
+    // keeps it from leaving with the agent.
+    id: 'macos-system-keychain',
+    pattern: '/Library/Keychains/**',
+    category: 'credential',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: MAC,
+    rationale:
+      'The machine-wide credential store: Wi-Fi and 802.1X secrets, and certificates whose private keys are guarded by a daemon that a stolen copy never has to ask.',
+  },
+  {
+    id: 'macos-ssh-host-keys',
+    pattern: '/private/etc/ssh/**',
+    category: 'credential',
+    readTier: 2,
+    writeTier: 2,
+    onRead: 'block',
+    onWrite: 'block',
+    platforms: MAC,
+    rationale:
+      'Host private keys, present once Remote Login is enabled; they authenticate the machine itself.',
   },
   {
     id: 'gnupg',

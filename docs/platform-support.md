@@ -48,9 +48,10 @@ Enforces:
   the file rules
 
 **Why macOS reports `DEGRADED`, deliberately.** The current profile denies the
-sensitive parts of the home directory but still permits broad reads *outside*
-it — system and toolchain locations are allowed as a class rather than
-enumerated. An enumerated read allowlist was attempted and reverted: on current
+sensitive parts of the home directory, and the credential stores outside it —
+the machine keychain under `/Library/Keychains` and the SSH host keys under
+`/private/etc/ssh` — but it still permits broad reads elsewhere outside home:
+system and toolchain locations are allowed as a class rather than enumerated. An enumerated read allowlist was attempted and reverted: on current
 macOS it crashes the runtime before `main()` even with system roots included,
 which would be a boundary that does not run rather than a boundary that holds.
 The reason is reported as `seatbelt.broad-system-read` on every run, so the gap
@@ -83,13 +84,13 @@ compatibility surface, and because network egress stays denied: an AppContainer
 cannot reach a loopback broker without an exemption this project does not grant.
 Requested destinations are refused rather than silently opened.
 
-**No console, and no terminal output yet.** An AppContainer token cannot open
-the launcher's console, and a child attached to one started but never exited.
-The confined process is therefore detached and receives the null device on all
-three standard handles, bounded by an explicit inheritance list rather than
-blanket inheritance. That makes the boundary work; it also means a Windows
-session currently produces no terminal output. Interactive Windows support is
-post-1.0 and needs handles the AppContainer token may actually use.
+**A confined child that starts but never exits.** The deny canary reaches its
+deadline instead of returning, so the suite reports `windows.child-timed-out`
+and Windows stays off the release gate. Detaching the child and handing it the
+null device on explicit handles was tried and did not change the timing, so the
+console is not the cause; the helper now bounds the wait and reclaims the Job
+Object rather than hanging. Finding the real cause needs a Windows machine with
+a debugger, and no further guess will be shipped before it is understood.
 
 Nothing is compiled on the user's machine, and nothing is downloaded at
 install time. The release gate refuses to publish a tarball that does not
@@ -110,9 +111,13 @@ readable but not writable, tier 2 stays fully denied, and egress is brokered
 (or on Windows, denied outright). Possible future narrowing, in order of
 increasing cost:
 
-- **macOS, targeted denies outside home** (`/private/etc/ssh` host keys,
-  `/var/root`): shrinks `seatbelt.broad-system-read` without the enumerated
-  allowlist that crashes the runtime.
+- **macOS, more targeted denies outside home.** The credential stores are done:
+  `/Library/Keychains` and `/private/etc/ssh` are tier 2 denies, verified
+  against a live sandbox. `/var/root` and the local account database are closed
+  by file permissions rather than by the profile, so an agent running as an
+  administrator would still reach them. Each further deny shrinks
+  `seatbelt.broad-system-read` without the enumerated allowlist that crashes
+  the runtime.
 - **Windows, opt-in loopback exemption**: `CheckNetIsolation LoopbackExempt`
   scoped to the container SID, granted with elevation during `activate`, would
   let the broker run and retire `network.appcontainer-deny-only`.

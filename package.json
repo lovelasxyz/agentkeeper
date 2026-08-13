@@ -1,6 +1,6 @@
 {
   "name": "agentkeeper",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Confine AI coding agents to what they need: OS-level sandboxing plus a thin detection layer. No Docker, no daemon in the cloud, no telemetry.",
   "keywords": [
     "ai-agent",

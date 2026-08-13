@@ -122,6 +122,11 @@ describe('sensitive path registry (spec §6.4)', () => {
       ['~/Library/Safari/History.db', 'credential', 'darwin'],
       ['~/.mozilla/firefox/x.default/logins.json', 'credential', 'darwin'],
       ['/private/var/at/tabs/dev', 'persistence', 'darwin'],
+      // Credential stores that live outside the home directory. The macOS
+      // profile permits broad reads out there, so these need explicit denies
+      // or they leave with the agent.
+      ['/Library/Keychains/System.keychain', 'credential', 'darwin'],
+      ['/private/etc/ssh/ssh_host_ed25519_key', 'credential', 'darwin'],
       // Linux-only surfaces have no macOS counterpart and must not be asserted there.
       ['~/.config/systemd/user/evil.service', 'persistence', 'linux'],
       ['~/.config/google-chrome/Default/Cookies', 'credential', 'linux'],

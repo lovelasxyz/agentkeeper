@@ -21,6 +21,32 @@ let root: string;
 let home: string;
 let workspace: string;
 
+/**
+ * A throwaway home fakes the identity directory, but a service manager is
+ * machine-wide and cannot be faked with it: `launchctl` reports the real user
+ * session whatever `$HOME` says. So on a machine where agentkeeper is genuinely
+ * activated, `init` here correctly refuses with `service-id-collision` — the
+ * self-protection invariant doing its job, not a regression.
+ *
+ * Left unexplained that surfaces as several unrelated-looking failures. Naming
+ * the precondition once turns them into one instruction.
+ */
+function requireNoRealServiceRegistration(): void {
+  if (process.platform !== 'darwin' || typeof process.getuid !== 'function') return;
+  try {
+    execFileSync('/bin/launchctl', ['print', `gui/${process.getuid()}/dev.agentkeeper.watcher`], {
+      stdio: 'ignore',
+    });
+  } catch {
+    return; // absent, which is what this suite needs
+  }
+  throw new Error(
+    'This machine has a real agentkeeper watcher registered with launchd, so the ' +
+      'lifecycle suite cannot install its own. Run `agentkeeper deactivate` before ' +
+      'the suite and `agentkeeper activate` after it.',
+  );
+}
+
 interface RunResult {
   readonly stdout: string;
   readonly status: number;
@@ -63,6 +89,7 @@ function cli(
 
 beforeAll(() => {
   expect(existsSync(BIN), 'run `npm run build` before the e2e suite').toBe(true);
+  requireNoRealServiceRegistration();
 
   root = realpathSync(mkdtempSync(join(tmpdir(), 'agentkeeper-e2e-')));
   home = join(root, 'home');

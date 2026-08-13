@@ -1,8 +1,11 @@
+declare const __AGENTKEEPER_VERSION__: string;
+
 import { AccessTierResolver } from '../domain/policy/AccessTierResolver.js';
 import { PolicyBuilder } from '../domain/policy/PolicyBuilder.js';
 import { SensitivePathRegistry } from '../domain/paths/SensitivePathRegistry.js';
 
 import { NodeFileSystem } from '../infrastructure/fs/NodeFileSystem.js';
+import { JsonDaemonRuntime } from '../infrastructure/store/JsonDaemonRuntime.js';
 import {
   JsonBaselineStore,
   JsonDecisionStore,
@@ -101,6 +104,21 @@ export class Container {
 
   get backupDir(): AbsolutePath {
     return this.stateDir.join('backups');
+  }
+
+  /**
+   * The published version, injected at build time.
+   *
+   * Declared here as well as on the router because the router resolves
+   * `--version` without ever building a container, and must not pull the whole
+   * composition graph onto the hook path to do it.
+   */
+  get version(): string {
+    return typeof __AGENTKEEPER_VERSION__ === 'string' ? __AGENTKEEPER_VERSION__ : '0.0.0-dev';
+  }
+
+  get daemonRuntime(): JsonDaemonRuntime {
+    return new JsonDaemonRuntime(this.files, this.stateDir);
   }
 
   async config(): Promise<Configuration> {

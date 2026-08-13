@@ -30,6 +30,12 @@ class ScriptedProcessExecutor implements InstallationProcessExecutor {
 const ok = (stdout = ''): InstallationProcessResult => ({ exitCode: 0, stdout, stderr: '' });
 const missing = (): InstallationProcessResult => ({ exitCode: 1, stdout: '', stderr: '' });
 
+const LAUNCHD_REGISTRATION: ServiceRegistration = {
+  platform: 'darwin',
+  id: 'dev.agentkeeper.watcher',
+  descriptorPath: AbsolutePath.of('/Users/dev/Library/LaunchAgents/dev.agentkeeper.watcher.plist'),
+};
+
 describe('ProcessGitConfigurationController', () => {
   it('reads NUL-delimited path bytes and changes only global core.hooksPath', async () => {
     let current: string | null = '/work/.husky';
@@ -111,6 +117,57 @@ describe('PlatformServiceController', () => {
     expect(processes.calls.some((call) => call.args[0] === 'bootstrap')).toBe(true);
     expect(processes.calls.some((call) => call.args[0] === 'kickstart')).toBe(false);
     expect(processes.calls).toHaveLength(callCount + 1); // the idempotency inspection only
+  });
+
+
+  it('waits for launchd to release the identifier before reporting removal', async () => {
+    // `bootout` returns before the job has left the domain. Reporting success
+    // immediately made an `activate` that follows a `deactivate` refuse with
+    // `service-id-collision`, leaving the machine with no protection at all.
+    let registered = true;
+    let printsAfterBootout = 0;
+    const processes = new ScriptedProcessExecutor((_executable, args) => {
+      if (args[0] === 'print') {
+        if (!registered) return missing();
+        // launchd keeps reporting the job for two more polls.
+        if (printsAfterBootout > 0 && ++printsAfterBootout > 3) registered = false;
+        return ok('state = running');
+      }
+      if (args[0] === 'bootout') {
+        printsAfterBootout = 1;
+        return ok();
+      }
+      return ok();
+    });
+    const controller = new PlatformServiceController(processes, {
+      launchdDomain: 'gui/501',
+      serviceSettlePollMs: 1,
+    });
+
+    await controller.setDesired(LAUNCHD_REGISTRATION, 'absent');
+
+    const bootoutAt = processes.calls.findIndex((call) => call.args[0] === 'bootout');
+    const pollsAfter = processes.calls
+      .slice(bootoutAt + 1)
+      .filter((call) => call.args[0] === 'print');
+    expect(bootoutAt).toBeGreaterThanOrEqual(0);
+    expect(pollsAfter.length).toBeGreaterThan(1);
+    expect(registered).toBe(false);
+  });
+
+  it('reports a service that never leaves the domain instead of pretending it did', async () => {
+    const processes = new ScriptedProcessExecutor((_executable, args) =>
+      args[0] === 'print' ? ok('state = running') : ok(),
+    );
+    const controller = new PlatformServiceController(processes, {
+      launchdDomain: 'gui/501',
+      serviceSettlePollMs: 1,
+      serviceSettleTimeoutMs: 10,
+    });
+
+    await expect(controller.setDesired(LAUNCHD_REGISTRATION, 'absent')).rejects.toThrow(
+      /still registered/i,
+    );
   });
 
   it('uses systemctl --user enable --now for login persistence', async () => {

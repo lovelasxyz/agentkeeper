@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.4
+
+### Fixed
+
+- **An upgrade left the old watcher running, and nothing said so.** Installing a
+  new version replaces the entrypoint on disk, but the resident daemon keeps
+  executing the code it booted with — so 1.0.3's keychain and coverage fixes sat
+  inert while `doctor` reported a healthy installation and `activate` answered
+  "already active". The watcher now records what it is actually running, and
+  `doctor` reports it: running the installed version, running an older one,
+  announced but dead, or absent. A false green about the thing that watches for
+  tampering is the last place this product may have one.
+- **`deactivate` reported success before launchd released the service.** An
+  `activate` issued immediately afterwards refused with `service-id-collision`,
+  and between the two commands the machine has no watcher at all. Removal now
+  waits for the identifier to actually leave the domain, and says so plainly if
+  it never does instead of pretending it did.
+
 ## 1.0.3
 
 ### Fixed

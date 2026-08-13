@@ -6,6 +6,30 @@ import { WorkspaceId } from '../../../domain/value-objects/WorkspaceId.js';
 import { Palette } from '../../messages/render.js';
 import { Flags, type Command } from '../Command.js';
 
+/**
+ * What the running watcher is, in its own words.
+ *
+ * `stale` is the case that matters: upgrading the package replaces the
+ * entrypoint while the daemon keeps executing the code it booted with, so a
+ * shipped fix can sit inert behind a healthy-looking installation.
+ */
+const WATCHER_REPORT: Readonly<Record<'absent' | 'stopped' | 'stale' | 'current', string>> = {
+  current: 'running the installed version',
+  stale: 'running an older version than the one installed — run `agentkeeper deactivate` then `agentkeeper activate` to restart it',
+  stopped: 'announced itself but is no longer running — run `agentkeeper activate`',
+  absent: 'not running: no watcher has announced itself',
+};
+
+function isAlive(pid: number): boolean {
+  try {
+    // Signal 0 performs the permission and existence check without delivering.
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 /** Runs a fresh deny-canary and reports effective guarantees, never configured intent. */
 export class DoctorCommand implements Command {
   readonly name = 'doctor';
@@ -74,10 +98,17 @@ export class DoctorCommand implements Command {
       installation = { healthy: false, error: (error as Error).message };
     }
 
+    const { daemonRuntimeState } = await import('../../../infrastructure/store/JsonDaemonRuntime.js');
+    const watcher = daemonRuntimeState(
+      await container.daemonRuntime.read(),
+      container.version,
+      isAlive,
+    );
+
     if (flags.has('json')) {
-      process.stdout.write(`${JSON.stringify({ status, installation }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ status, installation, watcher }, null, 2)}\n`);
     } else {
-      this.render(status, installation);
+      this.render(status, installation, watcher);
     }
     if (status.level === 'PROTECTED' && installation.healthy) return 0;
     return status.level === 'DEGRADED' ? 2 : 3;
@@ -93,6 +124,7 @@ export class DoctorCommand implements Command {
           readonly conflicts: number;
         }
       | { readonly healthy: false; readonly error: string },
+    watcherState: 'absent' | 'stopped' | 'stale' | 'current',
   ): void {
     const palette = Palette.forStream(process.stdout);
     const colour =
@@ -122,6 +154,9 @@ export class DoctorCommand implements Command {
           : installation.active
             ? `  needs repair: ${installation.changes} change(s), ${installation.conflicts} conflict(s)`
             : '  inactive: run `agentkeeper activate` once',
+      '',
+      palette.bold('Resident watcher'),
+      `  ${WATCHER_REPORT[watcherState]}`,
     ];
     process.stdout.write(`${lines.join('\n')}\n`);
   }

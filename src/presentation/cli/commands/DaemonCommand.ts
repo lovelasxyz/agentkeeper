@@ -116,6 +116,14 @@ export class DaemonCommand implements Command {
       ...started.coverage.reasons,
       ...(comparisonFailures > 0 ? ['initial persistence comparison failed'] : []),
     ];
+    // What is running, as opposed to what is installed. An upgrade replaces the
+    // entrypoint on disk while this process keeps the code it booted with, and
+    // only this record lets `doctor` tell the difference.
+    await container.daemonRuntime.announce({
+      pid: process.pid,
+      version: container.version,
+      startedAt: container.clock.now().toISOString(),
+    });
     await audit.append({
       at: container.clock.now(),
       event: 'daemon.started',

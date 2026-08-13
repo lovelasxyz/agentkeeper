@@ -115,6 +115,10 @@ export interface PlatformServiceControllerOptions {
   readonly systemctl?: string;
   readonly schtasks?: string;
   readonly powershell?: string;
+  /** How long to wait for launchd to release a booted-out identifier. */
+  readonly serviceSettleTimeoutMs?: number;
+  /** Injectable only to keep the settle tests fast. */
+  readonly serviceSettlePollMs?: number;
 }
 
 /** User-level launchd/systemd/Task Scheduler controller with idempotent state changes. */
@@ -123,6 +127,8 @@ export class PlatformServiceController implements ServiceController {
   private readonly systemctl: string;
   private readonly schtasks: string;
   private readonly powershell: string;
+  private readonly serviceSettleTimeoutMs: number;
+  private readonly serviceSettlePollMs: number;
 
   constructor(
     private readonly processes: InstallationProcessExecutor,
@@ -132,6 +138,8 @@ export class PlatformServiceController implements ServiceController {
     this.systemctl = options.systemctl ?? 'systemctl';
     this.schtasks = options.schtasks ?? 'schtasks.exe';
     this.powershell = options.powershell ?? 'powershell.exe';
+    this.serviceSettleTimeoutMs = options.serviceSettleTimeoutMs ?? 5_000;
+    this.serviceSettlePollMs = options.serviceSettlePollMs ?? 100;
   }
 
   async inspect(registration: ServiceRegistration): Promise<ServiceStatus> {
@@ -183,6 +191,26 @@ export class PlatformServiceController implements ServiceController {
     // Recreate registration, then stop without removing its login enablement.
     await this.setDesired(registration, 'active');
     await this.stopPreservingRegistration(registration);
+  }
+
+  /**
+   * `bootout` returns before the job has actually left the domain.
+   *
+   * Reporting removal at that point made an `activate` following a
+   * `deactivate` refuse with `service-id-collision` — and between the two the
+   * machine has no watcher at all, so the failure lands at the worst moment.
+   */
+  private async awaitLaunchdRelease(registration: ServiceRegistration): Promise<void> {
+    const deadline = Date.now() + this.serviceSettleTimeoutMs;
+    for (;;) {
+      if (!(await this.inspectLaunchd(registration)).registered) return;
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Service ${registration.id} is still registered ${this.serviceSettleTimeoutMs}ms after bootout`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, this.serviceSettlePollMs));
+    }
   }
 
   private async inspectLaunchd(registration: ServiceRegistration): Promise<ServiceStatus> {
@@ -246,6 +274,7 @@ export class PlatformServiceController implements ServiceController {
     const target = `${domain}/${registration.id}`;
     if (desired === 'absent') {
       await this.success(this.launchctl, ['bootout', target]);
+      await this.awaitLaunchdRelease(registration);
       return;
     }
     if (!current.registered) {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { MonitorPersistence } from '../../src/application/use-cases/MonitorPersistence.js';
+import {
+  JsonDaemonRuntime,
+  daemonRuntimeState,
+} from '../../src/infrastructure/store/JsonDaemonRuntime.js';
 import { BaselineCollector } from '../../src/presentation/daemon/BaselineCollector.js';
 import { JsonPauseState } from '../../src/infrastructure/store/JsonPauseState.js';
 import { JsonPersistencePendingStore } from '../../src/infrastructure/store/JsonPersistencePendingStore.js';
@@ -341,5 +345,40 @@ describe('watch targets', () => {
     const state = targets.find((target) => target.path.value.endsWith('/.agentkeeper'));
 
     expect(state?.recursive).toBe(true);
+  });
+});
+
+describe('resident watcher self-report', () => {
+  const alive = () => true;
+  const dead = () => false;
+
+  it('reports the running watcher as stale when the package was upgraded under it', async () => {
+    // `npm i -g` replaces the entrypoint, but the daemon keeps running the code
+    // it loaded at boot. Reporting that as healthy leaves a shipped security
+    // fix inert while the CLI says everything matches.
+    const files = new InMemoryFileSystem();
+    const runtime = new JsonDaemonRuntime(files, STATE);
+    await runtime.announce({ pid: 4242, version: '1.0.2', startedAt: '2026-08-13T11:13:43.000Z' });
+
+    expect(daemonRuntimeState(await runtime.read(), '1.0.3', alive)).toBe('stale');
+    expect(daemonRuntimeState(await runtime.read(), '1.0.2', alive)).toBe('current');
+  });
+
+  it('does not report a dead watcher as running', async () => {
+    const files = new InMemoryFileSystem();
+    const runtime = new JsonDaemonRuntime(files, STATE);
+    await runtime.announce({ pid: 4242, version: '1.0.3', startedAt: '2026-08-13T11:13:43.000Z' });
+
+    expect(daemonRuntimeState(await runtime.read(), '1.0.3', dead)).toBe('stopped');
+  });
+
+  it('treats a corrupt or missing record as no watcher at all', async () => {
+    const files = new InMemoryFileSystem();
+    const runtime = new JsonDaemonRuntime(files, STATE);
+    expect(await runtime.read()).toBeNull();
+
+    await files.write(STATE.join('daemon.json'), '{ not json');
+    expect(await runtime.read()).toBeNull();
+    expect(daemonRuntimeState(await runtime.read(), '1.0.3', alive)).toBe('absent');
   });
 });

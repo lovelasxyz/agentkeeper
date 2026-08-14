@@ -81,7 +81,7 @@ The destination policy is identical everywhere; only the pipe differs.
 |---|---|---|
 | macOS | Loopback TCP to the broker | The Seatbelt profile permits that one loopback port and nothing else. DNS is allowed only through the system `mDNSResponder` socket, not through arbitrary Unix sockets. |
 | Linux | Unix socket relay into an isolated network namespace | The sandbox has no route to the host network. A relay inside the namespace forwards loopback connections to the mounted socket. |
-| Windows | None yet | AppContainer starts with zero network capability; requested egress stays denied and is reported as such. |
+| Windows | — | No backend ships: with no sandbox there is nothing to broker, and the platform reports UNPROTECTED. |
 
 ## Proving it
 

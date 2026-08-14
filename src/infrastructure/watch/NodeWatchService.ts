@@ -1,5 +1,6 @@
 import { watch } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
+import type { WatchTarget } from '../../application/ports/PersistenceMonitor.js';
 import { SingleFlightScheduler } from '../../application/services/SingleFlightScheduler.js';
 import { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 
@@ -38,18 +39,6 @@ export interface NodeWatchServiceOptions {
   readonly persistent?: boolean;
   /** Injectable only to contract-test platform-independent orchestration. */
   readonly watchDirectory?: WatchDirectory;
-}
-
-/**
- * A directory (or file) to watch, and whether coverage must reach below it.
- *
- * Recursion is opt-in because handles are budgeted: an anchor whose pattern
- * never matches below one level would spend the whole budget on session data
- * and starve every target registered after it.
- */
-export interface WatchTarget {
-  readonly path: AbsolutePath;
-  readonly recursive: boolean;
 }
 
 export type WatchChangeHandler = (event: WatchEvent) => void;

@@ -70,7 +70,7 @@ export class AssessProtection {
         windows ? 'platform.windows-runner-unavailable' : 'sandbox.runner-missing',
         'platform',
         windows
-          ? 'The native Windows AppContainer backend is unavailable or failed its preflight; no OS isolation boundary is active.'
+          ? 'No Windows sandbox backend is shipped: the AppContainer backend never completed its own deny canary, and an unproven boundary is not a boundary.'
           : 'No sandbox runner is available; no isolation boundary is active.',
       );
     }
@@ -134,15 +134,6 @@ export class AssessProtection {
           'The current Seatbelt profile permits broad reads outside user home directories.',
         ),
       );
-    } else if (mechanism === 'appcontainer') {
-      filesystem = 'partial';
-      reasons.push(
-        reason(
-          'appcontainer.compatibility-surface',
-          'filesystem',
-          'Stable AppContainer confines user resources but retains a documented common-system compatibility surface.',
-        ),
-      );
     }
 
     // One network rule for every backend: egress exists only through a broker
@@ -150,15 +141,7 @@ export class AssessProtection {
     // denied, because every backend fails a protected run closed instead.
     let network: NetworkProtection = 'denied';
     if (egressRequested) {
-      if (mechanism === 'appcontainer') {
-        reasons.push(
-          reason(
-            'network.appcontainer-deny-only',
-            'network',
-            'AppContainer starts with zero network capabilities; requested egress stays denied until a destination broker is available.',
-          ),
-        );
-      } else if (broker.verified) {
+      if (broker.verified) {
         network = 'brokered';
       } else {
         reasons.push(broker.reason ?? BROKER_REQUIRED);
@@ -246,8 +229,7 @@ function mechanismMatchesPlatform(
 ): boolean {
   return (
     (mechanism === 'seatbelt' && platform === 'darwin') ||
-    (mechanism === 'bubblewrap' && platform === 'linux') ||
-    (mechanism === 'appcontainer' && platform === 'win32')
+    (mechanism === 'bubblewrap' && platform === 'linux')
   );
 }
 

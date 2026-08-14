@@ -45,8 +45,10 @@ weaker than full container isolation and stronger than any set of rules.**
 Two layers, which do not duplicate each other.
 
 **Layer 1 — the sandbox.** The agent starts inside an OS isolation profile:
-`sandbox-exec` (Seatbelt) on macOS, `bubblewrap` on Linux, AppContainer on
-Windows. This decides what exists at all. Outbound traffic goes through a
+`sandbox-exec` (Seatbelt) on macOS, `bubblewrap` on Linux. Windows ships no
+backend — its AppContainer canary never passed, so the platform reports
+UNPROTECTED instead of pretending (see docs/platform-support.md). This decides
+what exists at all. Outbound traffic goes through a
 destination broker that allows named hosts and refuses everything else.
 
 **Layer 2 — the rules.** A `PreToolUse` hook, a global git hook and a small
@@ -137,7 +139,7 @@ for it.
 | The profile is fixed when the process starts | A new grant applies to the **next** run. The tool says so instead of pretending otherwise. |
 | Nothing inside an allowed destination is inspected | Once `api.anthropic.com:443` is allowed, what travels inside that TLS session is not examined. The alternative is terminating the agent's TLS, which is worse. |
 | macOS reports `DEGRADED`, not `PROTECTED` | The Seatbelt profile denies every credential, persistence and history path but still permits broad reads *outside* home. An enumerated read allowlist crashes the runtime on current macOS, so the gap is reported on every run instead of hidden. |
-| Windows reports `DEGRADED` | AppContainer confines the filesystem and the process tree, but keeps a documented common-system surface, and its egress stays denied rather than brokered. |
+| Windows reports `UNPROTECTED` | No AppContainer backend is shipped: its deny canary never completed on real hardware, and an unproven boundary is not shipped. The detection layer still works there. |
 | `sandbox-exec` is deprecated by Apple | Still the built-in mechanism, still working in current macOS. The risk is stated here rather than hidden. |
 | `bwrap` is not installed everywhere | Without it, layer 1 is unavailable and `run` refuses to start rather than run unprotected. |
 | Weaker than a container | Shared kernel. |
@@ -326,13 +328,10 @@ npm version 1.0.x          # bumps package.json + lockfile, commits, tags v1.0.x
 git push --follow-tags     # the tag triggers publish.yml
 ```
 
-The pipeline verifies on macOS, Linux and Windows, cross-compiles the Windows
-AppContainer helpers, assembles the tarball, refuses it if anything is missing,
-and only then runs `npm publish --provenance --access public`.
-
-A local `npm publish` is deliberately awkward: `prepack` requires the Windows
-helper binaries, which exist only as CI artifacts. Publishing is a pipeline
-decision, not a laptop decision.
+The pipeline verifies on macOS, Linux and Windows, enforces the performance
+budgets, assembles the tarball, refuses it if anything is missing — or if a
+native Windows helper is present, because that backend is not shipped — and
+only then runs `npm publish --provenance --access public`.
 
 ---
 

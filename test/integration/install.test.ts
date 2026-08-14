@@ -423,3 +423,53 @@ describe('BaselineCollector', () => {
     expect(collector.isRelevantWatchEvent(null, context)).toBe(true);
   });
 });
+
+describe('BaselineCollector scope caching', () => {
+  const context: PathContext = {
+    home: HOME,
+    workspace: HOME.join('projects/app'),
+    platform: 'darwin',
+  };
+
+  it('computes the watch scopes once per context, not once per caller', async () => {
+    // collect() runs on every debounced comparison; rebuilding the scope list
+    // each time walks 50 registry entries and allocates a closure per anchor.
+    // The registry is frozen for the process, so one computation per context
+    // is the whole answer.
+    const real = SensitivePathRegistry.default();
+    let walks = 0;
+    const counting = {
+      forPlatform: (platform: Parameters<typeof real.forPlatform>[0]) => {
+        walks += 1;
+        return real.forPlatform(platform);
+      },
+    } as unknown as SensitivePathRegistry;
+    const files = new InMemoryFileSystem();
+    await files.write(HOME.join('.zshenv'), 'export A=1\n');
+    const collector = new BaselineCollector(files, counting, new FixedClock());
+
+    collector.targets(context);
+    collector.watchTargets(context);
+    await collector.collect(context);
+    collector.targets(context);
+
+    expect(walks).toBe(1);
+  });
+
+  it('does not share scopes across different contexts', async () => {
+    const real = SensitivePathRegistry.default();
+    let walks = 0;
+    const counting = {
+      forPlatform: (platform: Parameters<typeof real.forPlatform>[0]) => {
+        walks += 1;
+        return real.forPlatform(platform);
+      },
+    } as unknown as SensitivePathRegistry;
+    const collector = new BaselineCollector(new InMemoryFileSystem(), counting, new FixedClock());
+
+    collector.targets(context);
+    collector.targets({ ...context, home: HOME.join('other') });
+
+    expect(walks).toBe(2);
+  });
+});

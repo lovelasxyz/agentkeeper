@@ -10,12 +10,26 @@ import type {
   Environment,
   Logger,
   Notifier,
+  ProcessLiveness,
   Prompter,
 } from '../application/ports/index.js';
 
 export class SystemClock implements Clock {
   now(): Date {
     return new Date();
+  }
+}
+
+/** Real process-liveness probing over signal 0. */
+export class NodeProcessLiveness implements ProcessLiveness {
+  isAlive(pid: number): boolean {
+    try {
+      // Signal 0 performs the permission and existence check without delivering.
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
   }
 }
 

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { PERF_BUDGETS } from './perf-budgets.mjs';
+
 /**
  * The non-functional promises of spec §12 and §16, measured rather than assumed.
  *
@@ -66,11 +68,11 @@ describe('performance budgets (spec §12)', () => {
    * makes something several times slower.
    */
   it('keeps the PreToolUse hook from regressing', () => {
-    expect(budgets['hookOwnCost']).toBeLessThan(120);
+    expect(budgets['hookOwnCost']).toBeLessThanOrEqual(PERF_BUDGETS.hookOwnCost);
   });
 
   it('keeps a 200-file workspace scan from regressing', () => {
-    expect(budgets['scanOwnCost']).toBeLessThan(250);
+    expect(budgets['scanOwnCost']).toBeLessThanOrEqual(PERF_BUDGETS.scanOwnCost);
   });
 
   /**
@@ -86,13 +88,13 @@ describe('performance budgets (spec §12)', () => {
    * total is reported next to it. See README, "Honest limits".
    */
   it('keeps its own share of the wrapper overhead from regressing', () => {
-    expect(budgets['wrapperOwnCost']).toBeLessThan(150);
+    expect(budgets['wrapperOwnCost']).toBeLessThanOrEqual(PERF_BUDGETS.wrapperOwnCost);
   });
 
   it('keeps the total wrapper overhead within a usable range', () => {
     // Not the spec's 100 ms: that floor is not reachable from Node. This guards
     // against regression rather than certifying the original number.
-    expect(budgets['wrapperTotalOverhead']).toBeLessThan(300);
+    expect(budgets['wrapperTotalOverhead']).toBeLessThanOrEqual(PERF_BUDGETS.wrapperTotalOverhead);
   });
 });
 

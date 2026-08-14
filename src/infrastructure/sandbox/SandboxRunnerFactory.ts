@@ -1,7 +1,6 @@
 import { BubblewrapRunner } from './BubblewrapRunner.js';
 import { NoopRunner } from './NoopRunner.js';
 import { SeatbeltRunner } from './SeatbeltRunner.js';
-import { WindowsSandboxRunner } from './WindowsSandboxRunner.js';
 import type { SandboxRunner } from '../../application/ports/SandboxRunner.js';
 import type { Platform } from '../../domain/value-objects/Platform.js';
 
@@ -11,13 +10,17 @@ import type { Platform } from '../../domain/value-objects/Platform.js';
  * Returns `null` rather than silently falling back to `NoopRunner`: whether an
  * unprotected run is acceptable is the user's decision to make in config, not
  * this factory's to make by default.
+ *
+ * Windows deliberately has no candidate: the AppContainer backend never
+ * released its canary child (production-readiness P0.1), and shipping it
+ * would be claiming a boundary that was never proven. The platform reports
+ * UNPROTECTED until a backend passes its own deny canary on real hardware.
  */
 export class SandboxRunnerFactory {
   constructor(
     private readonly candidates: readonly SandboxRunner[] = [
       new SeatbeltRunner(),
       new BubblewrapRunner(),
-      new WindowsSandboxRunner(),
     ],
   ) {}
 
@@ -40,8 +43,6 @@ function matchesPlatform(candidate: SandboxRunner, platform: Platform): boolean 
       return platform === 'darwin';
     case 'bubblewrap':
       return platform === 'linux';
-    case 'appcontainer':
-      return platform === 'win32';
     case 'none':
       return false;
   }

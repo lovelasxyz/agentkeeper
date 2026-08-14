@@ -48,7 +48,6 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
-    "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit --project integration",

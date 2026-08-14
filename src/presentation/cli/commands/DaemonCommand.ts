@@ -2,8 +2,11 @@ import { Container } from '../../../composition/Container.js';
 import { MonitorPersistence } from '../../../application/use-cases/MonitorPersistence.js';
 import { SingleFlightScheduler } from '../../../application/services/SingleFlightScheduler.js';
 import { SerialAuditLog } from '../../../application/services/SerialAuditLog.js';
+import { UpgradeMonitor } from '../../../application/services/UpgradeMonitor.js';
 import { JsonPauseState } from '../../../infrastructure/store/JsonPauseState.js';
 import { JsonPersistencePendingStore } from '../../../infrastructure/store/JsonPersistencePendingStore.js';
+import { installedPackageVersion } from '../../../infrastructure/install/InstalledPackageVersion.js';
+import { AbsolutePath } from '../../../domain/value-objects/AbsolutePath.js';
 import { NodeWatchService, type WatchSession } from '../../../infrastructure/watch/NodeWatchService.js';
 import { BaselineCollector } from '../../daemon/BaselineCollector.js';
 import type { PathContext } from '../../../domain/paths/PathContext.js';
@@ -12,6 +15,19 @@ import type { Command } from '../Command.js';
 /** One leading comparison catches transient drift; one trailing pass sees settled editor output. */
 const SETTLE_MS = 750;
 
+/**
+ * How often the daemon checks whether the package on disk is newer than the
+ * code it is running. Cheap: one bounded read beside the entrypoint.
+ */
+const UPGRADE_CHECK_INTERVAL_MS = 60_000;
+
+/**
+ * Exit code asking the service manager to restart the daemon onto the new
+ * code: launchd `KeepAlive` restarts any exit, and systemd `on-failure` /
+ * Task Scheduler `RestartOnFailure` treat a non-zero code as a failure.
+ */
+export const DAEMON_EXIT_UPGRADE = 75;
+
 /** `agentkeeper daemon` — resident persistence monitor (entry point E2). */
 export class DaemonCommand implements Command {
   readonly name = 'daemon';
@@ -19,6 +35,7 @@ export class DaemonCommand implements Command {
   readonly summary = 'Internal: watch for persistence changes (started by activate)';
 
   private timer: NodeJS.Timeout | null = null;
+  private upgradeTimer: NodeJS.Timeout | null = null;
 
   async execute(args: readonly string[]): Promise<number> {
     const container = new Container({ interactive: false });
@@ -118,11 +135,17 @@ export class DaemonCommand implements Command {
     ];
     // What is running, as opposed to what is installed. An upgrade replaces the
     // entrypoint on disk while this process keeps the code it booted with, and
-    // only this record lets `doctor` tell the difference.
+    // only this record lets `doctor` tell the difference. The coverage travels
+    // in the same announcement: a degraded watcher that is visible only in the
+    // audit log is halfway to a false green.
     await container.daemonRuntime.announce({
       pid: process.pid,
       version: container.version,
       startedAt: container.clock.now().toISOString(),
+      coverage: {
+        status: effectiveStatus === 'degraded' ? 'degraded' : 'protected',
+        reasons: effectiveReasons,
+      },
     });
     await audit.append({
       at: container.clock.now(),
@@ -141,6 +164,40 @@ export class DaemonCommand implements Command {
     return this.waitForShutdown(started.session, audit, container);
   }
 
+  /**
+   * Watches for an upgrade replacing the code underneath this process and, on
+   * proof, hands itself back to the service manager. Without it an upgrade is
+   * inert until reboot: the machine keeps running the build it booted with.
+   */
+  private watchForUpgrade(container: Container, audit: SerialAuditLog, stop: (exitCode: number) => void): NodeJS.Timeout | null {
+    const entrypointArgument = process.argv[1];
+    if (entrypointArgument === undefined) return null;
+    const entrypoint = AbsolutePath.of(entrypointArgument);
+    const monitor = new UpgradeMonitor(
+      container.version,
+      () => installedPackageVersion(container.files, entrypoint),
+      (installed) => {
+        void audit
+          .append({
+            at: container.clock.now(),
+            event: 'daemon.upgrade.detected',
+            details: { running: container.version, installed },
+          })
+          .catch((error: unknown) => {
+            container.logger.error(`could not record upgrade detection: ${message(error)}`);
+          })
+          .finally(() => stop(DAEMON_EXIT_UPGRADE));
+      },
+    );
+    const timer = setInterval(() => {
+      void monitor.checkOnce().catch((error: unknown) => {
+        container.logger.error(`upgrade check failed: ${message(error)}`);
+      });
+    }, UPGRADE_CHECK_INTERVAL_MS);
+    timer.unref();
+    return timer;
+  }
+
   private waitForShutdown(
     session: WatchSession,
     audit: SerialAuditLog,
@@ -148,9 +205,10 @@ export class DaemonCommand implements Command {
   ): Promise<number> {
     return new Promise<number>((resolve) => {
       let stopped = false;
-      const shutdown = (signal: NodeJS.Signals): void => {
+      const shutdown = (cause: NodeJS.Signals | 'upgrade', exitCode = 0): void => {
         if (stopped) return;
         stopped = true;
+        if (this.upgradeTimer !== null) clearInterval(this.upgradeTimer);
         session.close();
         if (this.timer !== null) clearTimeout(this.timer);
         process.removeListener('SIGINT', onInterrupt);
@@ -159,17 +217,20 @@ export class DaemonCommand implements Command {
           .append({
             at: container.clock.now(),
             event: 'daemon.stopped',
-            details: { signal },
+            details: { cause },
           })
           .catch((error: unknown) => {
             container.logger.error(`could not record daemon shutdown: ${message(error)}`);
           })
-          .finally(() => resolve(0));
+          .finally(() => resolve(exitCode));
       };
       const onInterrupt = (): void => shutdown('SIGINT');
       const onTerminate = (): void => shutdown('SIGTERM');
       process.once('SIGINT', onInterrupt);
       process.once('SIGTERM', onTerminate);
+      this.upgradeTimer = this.watchForUpgrade(container, audit, (exitCode) =>
+        shutdown('upgrade', exitCode),
+      );
     });
   }
 }

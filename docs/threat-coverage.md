@@ -40,7 +40,8 @@ them (spec §9.7).
   there is no per-process attribution in zone B (`fs.watch` gives no PID).
 - **Per-host network policy.** Not expressible in either mechanism without a
   proxy. Ports only on macOS, on/off on Linux.
-- **Windows.** Layer 2 only in 1.0.
+- **Windows.** Layer 2 only: no sandbox backend ships because its canary never
+  passed, so the platform reports `UNPROTECTED` rather than claiming one.
 
 Adding a new CVE means: a fixture in `test/fixtures/build.ts`, a failing test,
 then the rule — in that order.

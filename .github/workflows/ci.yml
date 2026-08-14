@@ -28,10 +28,6 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Configure the MSVC toolchain
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
       # Layer 1 on Linux needs bubblewrap. Without it the sandbox suite would
       # skip silently, which is exactly the kind of quiet gap this project is
       # about.
@@ -62,75 +58,36 @@ jobs:
       - run: npm run clean
       - run: npm run build
 
-      - name: Preserve the Windows AppContainer helper for package assembly
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-sandbox-x64
-          path: dist/native/win32-x64/agentkeeper-sandbox.exe
-          if-no-files-found: error
-
       # The tests that decide whether the product works: a real process under
       # the real mechanism, checking that forbidden things actually fail.
-      # Blocking on macOS and Linux, which are the declared full-support
-      # platforms.
+      # macOS and Linux are the declared full-support platforms. Windows runs
+      # everything portable; its sandbox suite is gone with the AppContainer
+      # backend, which is not shipped while its deny canary has never passed
+      # (production-readiness P0.1) — the platform reports UNPROTECTED honestly
+      # instead of gating a release on a boundary nobody has observed working.
       - name: Sandbox isolation tests
         if: runner.os != 'Windows'
         run: npm run test:sandbox
-
-      # Windows AppContainer is post-1.0 by design (spec §50, §63): the helper
-      # builds and the policy translates, but a real confined canary does not
-      # complete yet. Reported, never hidden — and never allowed to claim the
-      # platform works. Remove `continue-on-error` the day it passes.
-      - name: Sandbox isolation tests (Windows, not yet a release gate)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        shell: pwsh
-        # The verdict goes to the run summary, not only into a step nobody
-        # expands. Debugging a platform you do not own means the answer has to
-        # arrive without asking anyone to dig through the raw log.
-        run: |
-          $output = npm run test:sandbox 2>&1 | Out-String
-          Write-Output $output
-          $tail = ($output -split "`n" | Select-Object -Last 40) -join "`n"
-          @(
-            '### Windows sandbox suite — reported, not gating',
-            '',
-            '```',
-            $tail.TrimEnd(),
-            '```'
-          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: End-to-end install lifecycle
         if: runner.os != 'Windows'
         run: npm run test:e2e
 
+      # The budgets of spec §12 are enforced, not just measured: a hot-path
+      # regression fails the build here instead of being tolerated as
+      # mysterious slowness by every user. Thresholds live in
+      # test/e2e/perf-budgets.mjs, shared with the e2e regression suite.
+      - name: Performance budget gate
+        if: runner.os != 'Windows'
+        run: node test/e2e/bench.mjs dist/cli.js --enforce
+
       # Dogfooding: the tool scans its own repository.
       - name: Self-scan
         run: node dist/cli.js scan .
 
-  windows-native-arm64:
-    name: Windows native helper (ARM64 compile)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64_arm64
-      - run: node scripts/build-windows-sandbox.mjs arm64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-sandbox-arm64
-          path: dist/native/win32-arm64/agentkeeper-sandbox.exe
-          if-no-files-found: error
-
   package:
     name: package contents
-    needs: [verify, windows-native-arm64]
+    needs: [verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -142,26 +99,12 @@ jobs:
       - run: npm run clean
       - run: npm run build
 
-      - name: Add the prebuilt Windows AppContainer helper
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-sandbox-x64
-          path: dist/native/win32-x64
-
-      - name: Add the prebuilt Windows ARM64 AppContainer helper
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-sandbox-arm64
-          path: dist/native/win32-arm64
-
-      - run: test -f dist/native/win32-x64/agentkeeper-sandbox.exe
-      - run: test -f dist/native/win32-arm64/agentkeeper-sandbox.exe
       - run: npm run verify:package
 
-      # --ignore-scripts on purpose: prepack would rebuild dist after the
-      # cross-compiled helpers landed, so the tarball would be decided by a
-      # different tree than the one just verified. The verifier then reads the
-      # archive listing itself rather than trusting the working tree.
+      # --ignore-scripts on purpose: prepack would rebuild dist, so the
+      # tarball would be decided by a different tree than the one just
+      # verified. The verifier then reads the archive listing itself rather
+      # than trusting the working tree.
       - name: Verify the assembled tarball
         run: node scripts/verify-tarball.mjs
 

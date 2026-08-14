@@ -2,7 +2,7 @@ import { ContentHash } from '../../domain/value-objects/ContentHash.js';
 import type { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 import type { PathContext } from '../../domain/paths/PathContext.js';
 import type { SensitivePathRegistry } from '../../domain/paths/SensitivePathRegistry.js';
-import type { WatchTarget } from '../../infrastructure/watch/NodeWatchService.js';
+import type { WatchTarget } from '../../application/ports/PersistenceMonitor.js';
 import type { BaselineEntry, Clock, FileSystem } from '../../application/ports/index.js';
 import { mapWithConcurrency } from '../../application/services/BoundedConcurrency.js';
 
@@ -27,6 +27,13 @@ const SELF_MUTATING_STATE_FILES = new Set([
  * is hashed and discarded; the snapshot holds paths and digests only.
  */
 export class BaselineCollector {
+  /**
+   * Scopes are derived from a frozen registry and an immutable context, so
+   * the walk happens once per context rather than once per comparison cycle.
+   * Keyed weakly: a dropped context drops its cache entry with it.
+   */
+  private readonly scopeCache = new WeakMap<PathContext, readonly TargetScope[]>();
+
   constructor(
     private readonly files: FileSystem,
     private readonly registry: SensitivePathRegistry,
@@ -48,46 +55,11 @@ export class BaselineCollector {
    * screams constantly is the same as no signal.
    */
   private targetScopes(context: PathContext): readonly TargetScope[] {
-    const found = new Map<string, TargetScope>();
-
-    for (const entry of this.registry.forPlatform(context.platform)) {
-      if (entry.category !== 'persistence' && !PERSISTENCE_COMPANION_IDS.has(entry.id)) continue;
-      const anchor = entry.literalPrefix(context.home);
-      if (anchor === null) continue;
-      if (entry.id === 'agentkeeper-state') {
-        // decisions/audit/baseline are intentionally mutable control-plane
-        // files. Hashing them would make the daemon react to its own writes.
-        // The paths below are configuration or checksum-managed code and must
-        // remain stable outside explicit activate/repair operations.
-        for (const relative of [
-          'config.json',
-          'allowlist.json',
-          'installation/manifest.json',
-          'installation/backups',
-          'shell',
-          'shims',
-        ]) {
-          const target = context.home.join('.agentkeeper', relative);
-          // Checksum-managed code and configuration: every file under these
-          // belongs to the baseline.
-          found.set(target.value, { anchor: target, covers: () => true, recursive: true });
-        }
-        continue;
-      }
-      // Two entries can share an anchor (`~/.ssh/config` and `~/.ssh/**`).
-      // Replacing the scope would silently drop the first one's files, so the
-      // scopes are unioned: covered by either, recursive if either needs it.
-      const existing = found.get(anchor.value);
-      found.set(anchor.value, {
-        anchor,
-        covers:
-          existing === undefined
-            ? (path) => entry.matches(path, context)
-            : (path) => existing.covers(path) || entry.matches(path, context),
-        recursive: (existing?.recursive ?? false) || entry.descendsBelowPrefix(),
-      });
-    }
-    return [...found.values()];
+    const cached = this.scopeCache.get(context);
+    if (cached !== undefined) return cached;
+    const computed = computeTargetScopes(this.registry, context);
+    this.scopeCache.set(context, computed);
+    return computed;
   }
 
   /**
@@ -190,4 +162,59 @@ interface TargetScope {
   readonly covers: (path: AbsolutePath) => boolean;
   /** Whether the watcher must recurse below the anchor to see what matters. */
   readonly recursive: boolean;
+}
+
+/**
+ * Each watched anchor with the test that decides what belongs to it.
+ *
+ * The anchor of `~/.claude/settings*.json` is the whole `~/.claude`
+ * directory, which holds thousands of session files. Collecting all of them
+ * exceeded the listing limit and failed activation outright, and would have
+ * baselined files that change every few minutes — a tamper signal that
+ * screams constantly is the same as no signal.
+ */
+function computeTargetScopes(
+  registry: SensitivePathRegistry,
+  context: PathContext,
+): readonly TargetScope[] {
+  const found = new Map<string, TargetScope>();
+
+  for (const entry of registry.forPlatform(context.platform)) {
+    if (entry.category !== 'persistence' && !PERSISTENCE_COMPANION_IDS.has(entry.id)) continue;
+    const anchor = entry.literalPrefix(context.home);
+    if (anchor === null) continue;
+    if (entry.id === 'agentkeeper-state') {
+      // decisions/audit/baseline are intentionally mutable control-plane
+      // files. Hashing them would make the daemon react to its own writes.
+      // The paths below are configuration or checksum-managed code and must
+      // remain stable outside explicit activate/repair operations.
+      for (const relative of [
+        'config.json',
+        'allowlist.json',
+        'installation/manifest.json',
+        'installation/backups',
+        'shell',
+        'shims',
+      ]) {
+        const target = context.home.join('.agentkeeper', relative);
+        // Checksum-managed code and configuration: every file under these
+        // belongs to the baseline.
+        found.set(target.value, { anchor: target, covers: () => true, recursive: true });
+      }
+      continue;
+    }
+    // Two entries can share an anchor (`~/.ssh/config` and `~/.ssh/**`).
+    // Replacing the scope would silently drop the first one's files, so the
+    // scopes are unioned: covered by either, recursive if either needs it.
+    const existing = found.get(anchor.value);
+    found.set(anchor.value, {
+      anchor,
+      covers:
+        existing === undefined
+          ? (path) => entry.matches(path, context)
+          : (path) => existing.covers(path) || entry.matches(path, context),
+      recursive: (existing?.recursive ?? false) || entry.descendsBelowPrefix(),
+    });
+  }
+  return [...found.values()];
 }

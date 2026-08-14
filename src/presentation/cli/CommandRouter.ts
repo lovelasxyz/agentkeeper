@@ -1,14 +1,5 @@
 import type { Command } from './Command.js';
-
-/**
- * Injected by the bundler from package.json, so `--version` cannot drift from
- * what was published. Kept as a build-time constant rather than a runtime read:
- * this module is on the hook path, whose whole budget is 50 ms.
- */
-declare const __AGENTKEEPER_VERSION__: string;
-
-const VERSION =
-  typeof __AGENTKEEPER_VERSION__ === 'string' ? __AGENTKEEPER_VERSION__ : '0.0.0-dev';
+import { AGENTKEEPER_VERSION } from '../../version.js';
 
 /**
  * Name, help text, and how to load the implementation.
@@ -50,7 +41,7 @@ export class CommandRouter {
       return verb === undefined ? 1 : 0;
     }
     if (verb === '--version' || verb === '-v') {
-      process.stdout.write(`${VERSION}\n`);
+      process.stdout.write(`${AGENTKEEPER_VERSION}\n`);
       return 0;
     }
 

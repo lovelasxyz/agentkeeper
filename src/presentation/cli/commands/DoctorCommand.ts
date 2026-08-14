@@ -15,20 +15,10 @@ import { Flags, type Command } from '../Command.js';
  */
 const WATCHER_REPORT: Readonly<Record<'absent' | 'stopped' | 'stale' | 'current', string>> = {
   current: 'running the installed version',
-  stale: 'running an older version than the one installed — run `agentkeeper deactivate` then `agentkeeper activate` to restart it',
+  stale: 'running an older version than the one installed — run `agentkeeper activate` to restart it onto the new code',
   stopped: 'announced itself but is no longer running — run `agentkeeper activate`',
   absent: 'not running: no watcher has announced itself',
 };
-
-function isAlive(pid: number): boolean {
-  try {
-    // Signal 0 performs the permission and existence check without delivering.
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
 
 /** Runs a fresh deny-canary and reports effective guarantees, never configured intent. */
 export class DoctorCommand implements Command {
@@ -99,16 +89,18 @@ export class DoctorCommand implements Command {
     }
 
     const { daemonRuntimeState } = await import('../../../infrastructure/store/JsonDaemonRuntime.js');
+    const daemonRecord = await container.daemonRuntime.read();
     const watcher = daemonRuntimeState(
-      await container.daemonRuntime.read(),
+      daemonRecord,
       container.version,
-      isAlive,
+      (pid) => container.processLiveness.isAlive(pid),
     );
+    const watcherCoverage = daemonRecord?.coverage ?? null;
 
     if (flags.has('json')) {
-      process.stdout.write(`${JSON.stringify({ status, installation, watcher }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ status, installation, watcher, watcherCoverage }, null, 2)}\n`);
     } else {
-      this.render(status, installation, watcher);
+      this.render(status, installation, watcher, watcherCoverage);
     }
     if (status.level === 'PROTECTED' && installation.healthy) return 0;
     return status.level === 'DEGRADED' ? 2 : 3;
@@ -125,6 +117,7 @@ export class DoctorCommand implements Command {
         }
       | { readonly healthy: false; readonly error: string },
     watcherState: 'absent' | 'stopped' | 'stale' | 'current',
+    watcherCoverage: { readonly status: 'protected' | 'degraded'; readonly reasons: readonly string[] } | null,
   ): void {
     const palette = Palette.forStream(process.stdout);
     const colour =
@@ -157,6 +150,12 @@ export class DoctorCommand implements Command {
       '',
       palette.bold('Resident watcher'),
       `  ${WATCHER_REPORT[watcherState]}`,
+      // A watcher that watches less than it should is recorded in the audit
+      // log *and* quoted here: degradation nobody ever sees is halfway to a
+      // false green.
+      ...(watcherCoverage?.status === 'degraded'
+        ? watcherCoverage.reasons.map((reason) => `  coverage degraded: ${reason}`)
+        : []),
     ];
     process.stdout.write(`${lines.join('\n')}\n`);
   }

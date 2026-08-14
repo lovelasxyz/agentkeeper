@@ -19,6 +19,7 @@ import type {
 import type { ManagedInstallationOptions } from '../../src/infrastructure/install/ManagedInstallation.js';
 import { ProtectionInstallationPlanner } from '../../src/infrastructure/install/ProtectionInstallation.js';
 import type { Platform } from '../../src/domain/value-objects/Platform.js';
+import type { DaemonRuntimeStore } from '../../src/application/ports/index.js';
 import { InMemoryFileSystem } from './fakes.js';
 
 const HOME = AbsolutePath.of('/Users/dev');
@@ -67,6 +68,11 @@ class FakeServiceController implements ServiceController {
         : { registered: false, active: false, healthy: false };
   }
 
+  async restart(registration: ServiceRegistration): Promise<void> {
+    this.calls.push(`restart:${registration.id}`);
+    this.status = { registered: true, active: true, healthy: true };
+  }
+
   async restore(registration: ServiceRegistration, status: ServiceStatus): Promise<void> {
     this.calls.push(`restore:${registration.id}`);
     this.status = { ...status };
@@ -104,6 +110,7 @@ class FakeGitConfiguration implements GitConfigurationController {
 async function fixture(
   platform: Platform = 'darwin',
   originalHooksPath: string | null = '/work/.husky',
+  watcher?: { readonly installedVersion: string; readRunningVersion(): Promise<string | null> },
 ): Promise<{
   files: InMemoryFileSystem;
   service: FakeServiceController;
@@ -122,6 +129,7 @@ async function fixture(
     platform,
     service,
     git,
+    watcher,
   );
   const executor = new TransactionalProtectionInstallationExecutor(
     new TransactionalInstallationExecutor(files),
@@ -431,5 +439,101 @@ describe('ProtectionInstallationPlanner', () => {
 
     expect(hook).toContain('git rev-parse --git-dir');
     expect(hook).toContain('/hooks/post-checkout');
+  });
+});
+
+describe('stale watcher restart (an upgrade must be sufficient on its own)', () => {
+  class FakeDaemonRuntime implements DaemonRuntimeStore {
+    record: { pid: number; version: string; startedAt: string } | null = null;
+    async read() {
+      return this.record;
+    }
+    async announce(record: { pid: number; version: string; startedAt: string }) {
+      this.record = record;
+    }
+  }
+
+  const watcherAt = (runtime: FakeDaemonRuntime, installedVersion: string) => ({
+    installedVersion,
+    readRunningVersion: async () => (await runtime.read())?.version ?? null,
+  });
+
+  it('plans a service restart when the running watcher predates the installed version', async () => {
+    const runtime = new FakeDaemonRuntime();
+    const { planner, executor } = await fixture('darwin', '/work/.husky', watcherAt(runtime, '1.0.5'));
+    await executor.execute(await planner.plan('activate'));
+    // The watcher is already running — but the code it runs belongs to 1.0.4.
+    runtime.record = { pid: 4242, version: '1.0.4', startedAt: new Date().toISOString() };
+
+    const plan = await planner.plan('activate');
+
+    const serviceChange = plan.externalChanges.find((change) => change.kind === 'service');
+    expect(serviceChange).toMatchObject({ after: 'active', restart: true });
+    expect(plan.healthy).toBe(false);
+  });
+
+  it('restarts through the service controller when executing the plan', async () => {
+    const runtime = new FakeDaemonRuntime();
+    const { service, git, planner, executor } = await fixture(
+      'darwin',
+      '/work/.husky',
+      watcherAt(runtime, '1.0.5'),
+    );
+    await executor.execute(await planner.plan('activate'));
+    expect(service.calls).not.toContain('restart:dev.agentkeeper.watcher');
+
+    runtime.record = { pid: 4242, version: '1.0.4', startedAt: new Date().toISOString() };
+    const plan = await planner.plan('activate');
+    expect(plan.healthy).toBe(false);
+    await executor.execute(plan);
+
+    expect(service.calls).toContain('restart:dev.agentkeeper.watcher');
+    expect(git.writes.length).toBe(1); // activation write only; upgrade rewrites nothing
+  });
+
+  it('keeps a healthy installation untouched when the watcher runs the installed version', async () => {
+    const runtime = new FakeDaemonRuntime();
+    const { service, planner, executor } = await fixture(
+      'darwin',
+      '/work/.husky',
+      watcherAt(runtime, '1.0.5'),
+    );
+    await executor.execute(await planner.plan('activate'));
+    runtime.record = { pid: 4242, version: '1.0.5', startedAt: new Date().toISOString() };
+
+    const plan = await planner.plan('activate');
+
+    expect(plan.healthy).toBe(true);
+    expect(plan.externalChanges).toEqual([]);
+  });
+
+  it('does not invent a restart when no watcher has ever announced itself', async () => {
+    const runtime = new FakeDaemonRuntime();
+    const { planner, executor } = await fixture(
+      'darwin',
+      '/work/.husky',
+      watcherAt(runtime, '1.0.5'),
+    );
+    await executor.execute(await planner.plan('activate'));
+
+    const plan = await planner.plan('activate');
+
+    expect(plan.healthy).toBe(true);
+    expect(plan.externalChanges).toEqual([]);
+  });
+
+  it('restarts on repair as well, so either command is sufficient', async () => {
+    const runtime = new FakeDaemonRuntime();
+    const { planner, executor } = await fixture(
+      'darwin',
+      '/work/.husky',
+      watcherAt(runtime, '1.0.5'),
+    );
+    await executor.execute(await planner.plan('activate'));
+    runtime.record = { pid: 4242, version: '1.0.4', startedAt: new Date().toISOString() };
+
+    const plan = await planner.plan('repair');
+
+    expect(plan.externalChanges.some((change) => change.kind === 'service' && change.restart === true)).toBe(true);
   });
 });

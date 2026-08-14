@@ -5,22 +5,23 @@
  * before packing, `verify-tarball.mjs` checks the archive npm actually
  * assembled. One source so the gates cannot disagree.
  *
- * The Windows helpers are here because they are cross-compiled on other
- * runners and downloaded into `dist/`. A release built without them would
- * install cleanly and silently leave Windows users with no boundary.
+ * Native helpers are deliberately absent: the Windows AppContainer backend is
+ * not shipped (production-readiness P0.1), so a tarball containing one is a
+ * tarball claiming a boundary that was never proven. The verifier refuses it.
  */
 export const REQUIRED_PACKAGE_PATHS = Object.freeze([
   'dist/cli.js',
   'dist/index.js',
   'dist/index.d.ts',
-  'dist/native/win32-x64/agentkeeper-sandbox.exe',
-  'dist/native/win32-arm64/agentkeeper-sandbox.exe',
   'profiles/minimal.json',
   'README.md',
   'LICENSE',
   'SECURITY.md',
 ]);
 
-/** Only the compiled helper ships; build by-products must never be published. */
-export const NATIVE_ARCHITECTURES = Object.freeze(['win32-x64', 'win32-arm64']);
-export const NATIVE_HELPER = 'agentkeeper-sandbox.exe';
+/**
+ * What a publishable tarball must *not* contain. A native helper would mean
+ * the Windows backend snuck back into the release without its deny canary
+ * ever having passed.
+ */
+export const FORBIDDEN_PACKAGE_PATH_PREFIXES = Object.freeze(['dist/native']);

@@ -10,6 +10,13 @@ import { buildFixture, FIXTURES, type Fixture } from '../fixtures/build.js';
  * Spec §16: `init` → `uninstall` must return the system to exactly its previous
  * state, and the wrapper must be transparent. Both are checked here against the
  * built package, in a throwaway home directory.
+ *
+ * The suite is hermetic: the identity home arrives through the os module hook,
+ * and the service manager through a child_process module hook backed by a
+ * file-backed fake (test/e2e/support). So the suite runs identically on a
+ * clean CI runner and on a developer machine where agentkeeper is genuinely
+ * installed — the precondition that used to exclude exactly the machines the
+ * lifecycle matters most on.
  */
 
 const BIN = join(process.cwd(), 'dist/cli.js');
@@ -21,31 +28,20 @@ let root: string;
 let home: string;
 let workspace: string;
 
-/**
- * A throwaway home fakes the identity directory, but a service manager is
- * machine-wide and cannot be faked with it: `launchctl` reports the real user
- * session whatever `$HOME` says. So on a machine where agentkeeper is genuinely
- * activated, `init` here correctly refuses with `service-id-collision` — the
- * self-protection invariant doing its job, not a regression.
- *
- * Left unexplained that surfaces as several unrelated-looking failures. Naming
- * the precondition once turns them into one instruction.
- */
-function requireNoRealServiceRegistration(): void {
-  if (process.platform !== 'darwin' || typeof process.getuid !== 'function') return;
+/** The fake service manager's recorded state, so the suite can prove the
+ * lifecycle drove it — the seam observed, not assumed. */
+function serviceState(backend: 'launchd' | 'systemd'): Record<string, { running: boolean }> {
   try {
-    execFileSync('/bin/launchctl', ['print', `gui/${process.getuid()}/dev.agentkeeper.watcher`], {
-      stdio: 'ignore',
-    });
+    return JSON.parse(
+      readFileSync(join(root, 'services', `${backend}.json`), 'utf8'),
+    ) as Record<string, { running: boolean }>;
   } catch {
-    return; // absent, which is what this suite needs
+    return {};
   }
-  throw new Error(
-    'This machine has a real agentkeeper watcher registered with launchd, so the ' +
-      'lifecycle suite cannot install its own. Run `agentkeeper deactivate` before ' +
-      'the suite and `agentkeeper activate` after it.',
-  );
 }
+
+const serviceBackend = process.platform === 'darwin' ? 'launchd' : 'systemd';
+const serviceId = process.platform === 'darwin' ? 'dev.agentkeeper.watcher' : 'agentkeeper.service';
 
 interface RunResult {
   readonly stdout: string;
@@ -70,8 +66,10 @@ function cli(
         // from `$HOME`, so that an agent cannot redirect grants and decisions
         // into a directory it controls. Faking it therefore needs a loader
         // hook in the child process, and `NODE_OPTIONS` carries it into the
-        // processes the CLI itself starts.
+        // processes the CLI itself starts. The same loader installs the
+        // service-manager seam; its state lives under the throwaway root.
         AGENTKEEPER_E2E_IDENTITY_HOME: home,
+        AGENTKEEPER_E2E_SERVICE_STATE: join(root, 'services'),
         NODE_OPTIONS: `--import ${IDENTITY_LOADER}`,
       },
       timeout: options.timeout ?? 10_000,
@@ -89,7 +87,6 @@ function cli(
 
 beforeAll(() => {
   expect(existsSync(BIN), 'run `npm run build` before the e2e suite').toBe(true);
-  requireNoRealServiceRegistration();
 
   root = realpathSync(mkdtempSync(join(tmpdir(), 'agentkeeper-e2e-')));
   home = join(root, 'home');
@@ -314,12 +311,14 @@ describe('init and uninstall (spec §16)', () => {
     // level that depends on which backend the runner has.
     expect(status.stdout).toMatch(/PROTECTED|DEGRADED/);
     expect(status.stdout).toMatch(/deny canary: passed/);
-    // The login service registers in the real user domain, which a faked
-    // identity home cannot reach, so health of the resident watcher is proven
-    // by the service-controller integration tests rather than here. What this
-    // suite can prove is that the installation is recognised at all.
     expect(status.stdout).toMatch(/Managed installation/);
     expect(status.stdout).not.toMatch(/inactive: run `agentkeeper activate`/);
+  });
+
+  it('registered the login service with the (fake) service manager', () => {
+    // Direct observation of the seam: the lifecycle really did drive the
+    // service controller, and it did so against the fake, not this machine.
+    expect(serviceState(serviceBackend)[serviceId]).toEqual({ registered: true, running: true });
   });
 
   it('wraps every agent it claims to wrap', () => {
@@ -334,6 +333,18 @@ describe('init and uninstall (spec §16)', () => {
     }
   });
 
+  it('repair restores a genuinely damaged managed file', () => {
+    // The command exists so a damaged install heals; this watches it do so.
+    const managed = join(home, '.agentkeeper/git-hooks/pre-commit');
+    const original = readFileSync(managed, 'utf8');
+    writeFileSync(managed, '# tampered\n');
+
+    const result = cli(['repair', '--yes']);
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(managed, 'utf8')).toBe(original);
+  });
+
   it('restores the shell file byte for byte on uninstall', () => {
     const original = '# my shell\nexport EDITOR=vim\n';
     expect(cli(['uninstall', '--yes']).status).toBe(0);
@@ -344,6 +355,7 @@ describe('init and uninstall (spec §16)', () => {
     expect(existsSync(join(home, '.agentkeeper/shell/agentkeeper.sh'))).toBe(false);
     expect(existsSync(join(home, '.agentkeeper/shims/posix/claude'))).toBe(false);
     expect(existsSync(join(home, '.claude/settings.json'))).toBe(false);
+    expect(serviceState(serviceBackend)[serviceId]).toBeUndefined();
   });
 
   it('keeps grants and the audit log unless asked to purge', () => {
@@ -394,5 +406,67 @@ describe('the wrapper is transparent (spec §4.6)', () => {
     const result = cli(['run', '--', process.execPath, '-e', '0'], { cwd: home });
     expect(result.status).toBe(78);
     expect(result.stdout).toMatch(/Refusing to isolate/);
+  });
+});
+
+describe('the watcher report is observed, not assumed', () => {
+  const daemonRecord = (pid: number, version: string): string =>
+    `${JSON.stringify({ pid, version, startedAt: new Date().toISOString() }, null, 2)}\n`;
+
+  const installedVersion = (): string =>
+    (JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version: string })
+      .version;
+
+  it('reports a dead recorded watcher as stopped, never as healthy', () => {
+    mkdirSync(join(home, '.agentkeeper'), { recursive: true });
+    // pid 2^22-1 is beyond every mainstream pid_max, so it cannot be alive.
+    writeFileSync(join(home, '.agentkeeper/daemon.json'), daemonRecord(4_194_303, installedVersion()));
+
+    const status = cli(['status']);
+
+    expect(status.stdout).toMatch(/no longer running/);
+    expect(status.stdout).not.toMatch(/running the installed version/);
+  });
+
+  it('reports a live, same-version watcher as current', () => {
+    // The test runner's own process is a real live pid the signal-0 probe
+    // must accept; an EPERM-style false negative would read as stopped.
+    writeFileSync(join(home, '.agentkeeper/daemon.json'), daemonRecord(process.pid, installedVersion()));
+
+    expect(cli(['status']).stdout).toMatch(/running the installed version/);
+  });
+
+  it('reports a live watcher on an older version as stale, with the one-command remedy', () => {
+    writeFileSync(join(home, '.agentkeeper/daemon.json'), daemonRecord(process.pid, '0.0.0-shipped'));
+
+    const status = cli(['status']);
+
+    expect(status.stdout).toMatch(/older version/);
+    expect(status.stdout).toContain('agentkeeper activate');
+  });
+
+  it('quotes degraded watch coverage instead of leaving it in the audit log', () => {
+    // A user who never reads the audit log must still learn that one
+    // persistence surface is unwatched; a gap seen only in the log is halfway
+    // to a false green.
+    const report = JSON.parse(daemonRecord(process.pid, installedVersion())) as Record<
+      string,
+      unknown
+    >;
+    report['coverage'] = {
+      status: 'degraded',
+      reasons: ['/private/var/at/tabs recursive coverage failed: EACCES'],
+    };
+    writeFileSync(join(home, '.agentkeeper/daemon.json'), `${JSON.stringify(report, null, 2)}\n`);
+
+    const status = cli(['status']);
+
+    expect(status.stdout).toContain('coverage degraded:');
+    expect(status.stdout).toContain('/private/var/at/tabs');
+
+    const json = JSON.parse(cli(['status', '--json']).stdout) as {
+      watcherCoverage: { status: string; reasons: string[] };
+    };
+    expect(json.watcherCoverage.status).toBe('degraded');
   });
 });

@@ -2,7 +2,7 @@ import type { SandboxPolicy } from '../../domain/policy/SandboxPolicy.js';
 import type { PathContext } from '../../domain/paths/PathContext.js';
 import type { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 
-export type SandboxMechanism = 'seatbelt' | 'bubblewrap' | 'appcontainer' | 'none';
+export type SandboxMechanism = 'seatbelt' | 'bubblewrap' | 'none';
 
 /**
  * What a given mechanism can actually promise. Reported verbatim by
@@ -11,8 +11,8 @@ export type SandboxMechanism = 'seatbelt' | 'bubblewrap' | 'appcontainer' | 'non
  */
 export interface SandboxCapabilities {
   readonly mechanism: SandboxMechanism;
-  /** How file access is expressed: rules, a mount namespace, or AppContainer path capabilities. */
-  readonly fileModel: 'path-rules' | 'mount-namespace' | 'appcontainer-allowlist' | 'none';
+  /** How file access is expressed: rules or a mount namespace. */
+  readonly fileModel: 'path-rules' | 'mount-namespace' | 'none';
   /** `port` = per-port rules, `all-or-nothing` = on/off, `none` = not confined. */
   readonly networkGranularity: 'port' | 'all-or-nothing' | 'none';
 }

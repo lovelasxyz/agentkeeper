@@ -8,21 +8,14 @@ import type { PathContext } from './PathContext.js';
 export type SensitiveCategory = 'credential' | 'persistence' | 'history' | 'config';
 export type Access = 'read' | 'write';
 
-/** Plain data shape of a registry row (spec §6.4). */
-export interface SensitivePathSpec {
+/**
+ * What identifies a registry row regardless of category (spec §6.4). Tier and
+ * disposition are deliberately absent here: for credential and history rows
+ * they are implied, and implying them is what makes a weak row unwritable.
+ */
+export interface SensitivePathIdentity {
   readonly id: string;
   readonly pattern: string;
-  readonly category: SensitiveCategory;
-  /**
-   * Access tier per operation, because the two genuinely differ. Reading
-   * `~/.gitconfig` is what makes `git` work at all and costs little; writing it
-   * installs `core.hooksPath` and is vector V9. One tier per row could only be
-   * wrong in one of the two directions.
-   */
-  readonly readTier: AccessTierLevel;
-  readonly writeTier: AccessTierLevel;
-  readonly onRead: DispositionName;
-  readonly onWrite: DispositionName;
   readonly platforms: readonly Platform[];
   readonly rationale: string;
   /**
@@ -31,6 +24,15 @@ export interface SensitivePathSpec {
    */
   readonly outsideWorkspaceOnly?: boolean;
 }
+
+/**
+ * Persistence rows are never writable at runtime; their read side differs.
+ * The union makes the invariant structural: tier 2 pairs with `block`,
+ * tier 1 never does, and no caller can write the two apart.
+ */
+export type PersistenceReadSide =
+  | { readonly readTier: 2; readonly onRead: 'block' }
+  | { readonly readTier: 1; readonly onRead: 'ask' | 'observe' };
 
 export class SensitivePath {
   private constructor(
@@ -48,18 +50,64 @@ export class SensitivePath {
     Object.freeze(this);
   }
 
-  static fromSpec(spec: SensitivePathSpec): SensitivePath {
+  /** Credentials are never readable and never writable at runtime. There is no parameter to mistype. */
+  static credential(identity: SensitivePathIdentity): SensitivePath {
+    return SensitivePath.build('credential', identity, 2, 2, 'block', 'block');
+  }
+
+  /** Shell and REPL history: the same construction contract as credentials. */
+  static history(identity: SensitivePathIdentity): SensitivePath {
+    return SensitivePath.build('history', identity, 2, 2, 'block', 'block');
+  }
+
+  /** Persistence is never writable at runtime; only the read side is chosen per entry. */
+  static persistence(identity: SensitivePathIdentity & PersistenceReadSide): SensitivePath {
+    return SensitivePath.build('persistence', identity, identity.readTier, 2, identity.onRead, 'block');
+  }
+
+  /** Ordinary developer configuration states every guarantee explicitly. */
+  static configuration(
+    identity: SensitivePathIdentity & {
+      readonly readTier: AccessTierLevel;
+      readonly writeTier: AccessTierLevel;
+      readonly onRead: DispositionName;
+      readonly onWrite: DispositionName;
+    },
+  ): SensitivePath {
+    return SensitivePath.build(
+      'config',
+      identity,
+      identity.readTier,
+      identity.writeTier,
+      identity.onRead,
+      identity.onWrite,
+    );
+  }
+
+  private static build(
+    category: SensitiveCategory,
+    identity: SensitivePathIdentity,
+    readTier: AccessTierLevel,
+    writeTier: AccessTierLevel,
+    onRead: DispositionName,
+    onWrite: DispositionName,
+  ): SensitivePath {
+    // The constructors make this unreachable for typed callers; the guard is
+    // for the untyped boundary, where a hand-edited row must still fail loudly.
+    if ((readTier === 2) !== (onRead === 'block') || (writeTier === 2) !== (onWrite === 'block')) {
+      throw new Error(`${identity.id}: tier 2 requires block, and block requires tier 2`);
+    }
     return new SensitivePath(
-      spec.id,
-      PathPattern.of(spec.pattern),
-      spec.category,
-      AccessTier.ofLevel(spec.readTier),
-      AccessTier.ofLevel(spec.writeTier),
-      Disposition.of(spec.onRead),
-      Disposition.of(spec.onWrite),
-      Object.freeze([...spec.platforms]),
-      spec.rationale,
-      spec.outsideWorkspaceOnly ?? false,
+      identity.id,
+      PathPattern.of(identity.pattern),
+      category,
+      AccessTier.ofLevel(readTier),
+      AccessTier.ofLevel(writeTier),
+      Disposition.of(onRead),
+      Disposition.of(onWrite),
+      Object.freeze([...identity.platforms]),
+      identity.rationale,
+      identity.outsideWorkspaceOnly ?? false,
     );
   }
 

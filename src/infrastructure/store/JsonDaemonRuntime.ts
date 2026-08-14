@@ -1,14 +1,11 @@
-import type { FileSystem } from '../../application/ports/index.js';
+import type { DaemonRuntimeRecord, DaemonRuntimeStore, DaemonWatchCoverage, FileSystem } from '../../application/ports/index.js';
 import type { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 
-const MAX_RUNTIME_BYTES = 1_024;
+// Bounded, because an unbounded self-report is a write amplification channel;
+// loose enough to carry the coverage reasons doctor must be able to quote.
+const MAX_RUNTIME_BYTES = 4_096;
 
-/** What the resident watcher is actually running, as opposed to what is installed. */
-export interface DaemonRuntimeRecord {
-  readonly pid: number;
-  readonly version: string;
-  readonly startedAt: string;
-}
+export type { DaemonRuntimeRecord };
 
 /**
  * The resident watcher's self-report.
@@ -19,7 +16,7 @@ export interface DaemonRuntimeRecord {
  * sit inert while `doctor` reports a healthy installation — the false green
  * this product exists to refuse.
  */
-export class JsonDaemonRuntime {
+export class JsonDaemonRuntime implements DaemonRuntimeStore {
   private readonly path: AbsolutePath;
 
   constructor(
@@ -48,7 +45,12 @@ export class JsonDaemonRuntime {
       if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
       if (typeof version !== 'string' || version.length === 0) return null;
       if (typeof startedAt !== 'string') return null;
-      return { pid, version, startedAt };
+      // A malformed coverage field drops only that field: pid and version still
+      // answer what is running, which is the report's primary job.
+      const coverage = parseCoverage(record['coverage']);
+      return coverage === undefined
+        ? { pid, version, startedAt }
+        : { pid, version, startedAt, coverage };
     } catch {
       // A corrupt record must not be reported as a running watcher.
       return null;
@@ -70,4 +72,15 @@ export function daemonRuntimeState(
   if (record === null) return 'absent';
   if (!isAlive(record.pid)) return 'stopped';
   return record.version === installedVersion ? 'current' : 'stale';
+}
+
+function parseCoverage(raw: unknown): DaemonWatchCoverage | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const candidate = raw as Record<string, unknown>;
+  if (candidate['status'] !== 'protected' && candidate['status'] !== 'degraded') return undefined;
+  const reasons = candidate['reasons'];
+  if (!Array.isArray(reasons) || reasons.some((reason) => typeof reason !== 'string')) {
+    return undefined;
+  }
+  return { status: candidate['status'], reasons: reasons as string[] };
 }

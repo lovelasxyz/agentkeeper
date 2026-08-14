@@ -1,4 +1,4 @@
-import { SensitivePath, type Access, type SensitivePathSpec } from './SensitivePath.js';
+import { SensitivePath, type Access } from './SensitivePath.js';
 import { SENSITIVE_PATHS } from './registry.js';
 import type { AbsolutePath } from '../value-objects/AbsolutePath.js';
 import type { Platform } from '../value-objects/Platform.js';
@@ -6,7 +6,7 @@ import type { PathContext } from './PathContext.js';
 
 /**
  * Registry pattern (spec §8.3): one place that answers "is this path
- * sensitive, and how badly". Constructed from data so tests can swap in a
+ * sensitive, and how badly". Constructed from rows so tests can swap in a
  * fixture set without touching any rule.
  */
 export class SensitivePathRegistry {
@@ -15,14 +15,13 @@ export class SensitivePathRegistry {
   }
 
   static default(): SensitivePathRegistry {
-    return SensitivePathRegistry.fromSpecs(SENSITIVE_PATHS);
+    return SensitivePathRegistry.fromEntries(SENSITIVE_PATHS);
   }
 
-  static fromSpecs(specs: readonly SensitivePathSpec[]): SensitivePathRegistry {
-    const entries = specs.map((spec) => SensitivePath.fromSpec(spec));
+  static fromEntries(entries: readonly SensitivePath[]): SensitivePathRegistry {
     const duplicate = findDuplicateId(entries);
     if (duplicate) throw new Error(`Duplicate sensitive path id: ${duplicate}`);
-    return new SensitivePathRegistry(Object.freeze(entries));
+    return new SensitivePathRegistry(Object.freeze([...entries]));
   }
 
   all(): readonly SensitivePath[] {

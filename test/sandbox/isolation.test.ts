@@ -198,6 +198,15 @@ describeOnDarwin('isolation actually isolates (macOS / Seatbelt)', () => {
       expect(inSandbox(readProbe(join(home.value, relative)))).toMatch(/^DENIED:/);
     });
 
+    // Credential stores that live *outside* the home directory, where the
+    // profile still permits broad reads — these exist on a stock machine, so
+    // they are probed live rather than against the fake home.
+    it.each([
+      ['the machine keychain', '/Library/Keychains/System.keychain'],
+      ['the machine keychain through the firmlink', '/System/Volumes/Data/Library/Keychains/System.keychain'],
+    ])('refuses to read %s', (_label, absolute) => {
+      expect(inSandbox(readProbe(absolute))).toMatch(/^DENIED:/);
+    });
   });
 
   describe('writes that must fail', () => {

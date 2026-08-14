@@ -16,6 +16,10 @@ import type {
 } from '../../src/application/ports/index.js';
 import type { Finding } from '../../src/domain/entities/Finding.js';
 import type { Platform } from '../../src/domain/value-objects/Platform.js';
+import type {
+  InstallationProcessExecutor,
+  InstallationProcessResult,
+} from '../../src/application/ports/SystemIntegration.js';
 
 /**
  * In-memory adapters.
@@ -208,5 +212,24 @@ export class FakeEnvironment implements Environment {
 
   toolchainRoots(): readonly AbsolutePath[] {
     return [this.identityHome.join('.nvm')];
+  }
+}
+
+/** A scriptable InstallationProcessExecutor: records every call and answers
+ * from the supplied closure, so service/git controllers are tested without
+ * ever spawning a real process. */
+export class ScriptedProcessExecutor implements InstallationProcessExecutor {
+  readonly calls: Array<{ executable: string; args: readonly string[] }> = [];
+
+  constructor(
+    private readonly respond: (
+      executable: string,
+      args: readonly string[],
+    ) => InstallationProcessResult,
+  ) {}
+
+  async execute(executable: string, args: readonly string[]): Promise<InstallationProcessResult> {
+    this.calls.push({ executable, args });
+    return this.respond(executable, args);
   }
 }

@@ -39,15 +39,22 @@ describe('SandboxRunnerFactory platform selection', () => {
       fileModel: 'mount-namespace',
       networkGranularity: 'all-or-nothing',
     });
-    const windows = new AvailableRunner({
-      mechanism: 'appcontainer',
-      fileModel: 'appcontainer-allowlist',
+    const mac = new AvailableRunner({
+      mechanism: 'seatbelt',
+      fileModel: 'path-rules',
       networkGranularity: 'all-or-nothing',
     });
-    const factory = new SandboxRunnerFactory([linux, windows]);
+    const factory = new SandboxRunnerFactory([linux, mac]);
 
-    await expect(factory.forPlatform('win32')).resolves.toBe(windows);
+    await expect(factory.forPlatform('darwin')).resolves.toBe(mac);
     expect(linux.calls).toBe(0);
-    expect(windows.calls).toBe(1);
+    expect(mac.calls).toBe(1);
+  });
+
+  it('offers no runner on Windows: the AppContainer backend is not shipped', async () => {
+    // The AppContainer child never released its canary (production-readiness
+    // P0.1), so the package ships no Windows backend rather than one that
+    // fails its own proof. No runner is the honest answer there.
+    await expect(new SandboxRunnerFactory().forPlatform('win32')).resolves.toBeNull();
   });
 });

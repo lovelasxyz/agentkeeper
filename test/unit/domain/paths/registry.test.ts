@@ -127,6 +127,10 @@ describe('sensitive path registry (spec §6.4)', () => {
       // or they leave with the agent.
       ['/Library/Keychains/System.keychain', 'credential', 'darwin'],
       ['/private/etc/ssh/ssh_host_ed25519_key', 'credential', 'darwin'],
+      // Behind file permissions rather than the profile today; denied in the
+      // profile as well so an elevated agent still does not reach them.
+      ['/var/root/Library/Keychains/login.keychain-db', 'credential', 'darwin'],
+      ['/private/var/db/dslocal/nodes/Default/smb.plist', 'credential', 'darwin'],
       // Linux-only surfaces have no macOS counterpart and must not be asserted there.
       ['~/.config/systemd/user/evil.service', 'persistence', 'linux'],
       ['~/.config/google-chrome/Default/Cookies', 'credential', 'linux'],
@@ -235,5 +239,77 @@ describe('sensitive path registry (spec §6.4)', () => {
     expect(ids).toContain('launch-agents');
     expect(ids).toContain('powershell-core-profile');
     expect(ids).toContain('windows-powershell-profile');
+  });
+});
+
+describe('category constructors (invariants by construction, not by test)', () => {
+  const identity = {
+    pattern: '~/.example/**',
+    platforms: ['darwin' as const],
+    rationale: 'A rationale that explains why this exists at all.',
+  };
+
+  it('makes a tier-1 credential entry unrepresentable: the constructor offers no tier', async () => {
+    const { SensitivePath } = await import('../../../../src/domain/paths/SensitivePath.js');
+    const entry = SensitivePath.credential({ ...identity, id: 'demo-credential' });
+
+    // There are no tier parameters to mistype; the category implies them.
+    expect(entry.readTier.level).toBe(2);
+    expect(entry.writeTier.level).toBe(2);
+    expect(entry.dispositionFor('read').name).toBe('block');
+    expect(entry.dispositionFor('write').name).toBe('block');
+    expect(entry.category).toBe('credential');
+  });
+
+  it('gives history the same construction as a credential', async () => {
+    const { SensitivePath } = await import('../../../../src/domain/paths/SensitivePath.js');
+    const entry = SensitivePath.history({ ...identity, id: 'demo-history' });
+
+    expect(entry.readTier.level).toBe(2);
+    expect(entry.dispositionFor('write').name).toBe('block');
+    expect(entry.category).toBe('history');
+  });
+
+  it('lets a persistence entry choose its *read* side only, and never its write side', async () => {
+    const { SensitivePath } = await import('../../../../src/domain/paths/SensitivePath.js');
+    const entry = SensitivePath.persistence({
+      ...identity,
+      id: 'demo-persistence',
+      readTier: 1,
+      onRead: 'observe',
+    });
+
+    expect(entry.readTier.level).toBe(1);
+    expect(entry.dispositionFor('read').name).toBe('observe');
+    expect(entry.writeTier.level).toBe(2);
+    expect(entry.dispositionFor('write').name).toBe('block');
+  });
+
+  it('refuses an inconsistent read pair even from untyped callers', async () => {
+    const { SensitivePath } = await import('../../../../src/domain/paths/SensitivePath.js');
+
+    expect(() =>
+      SensitivePath.persistence({
+        ...identity,
+        id: 'demo-inconsistent',
+        readTier: 2,
+        onRead: 'observe',
+      } as never),
+    ).toThrow(/tier 2.*block/i);
+  });
+
+  it('keeps ordinary config fully explicit', async () => {
+    const { SensitivePath } = await import('../../../../src/domain/paths/SensitivePath.js');
+    const entry = SensitivePath.configuration({
+      ...identity,
+      id: 'demo-config',
+      readTier: 1,
+      writeTier: 1,
+      onRead: 'observe',
+      onWrite: 'observe',
+    });
+
+    expect(entry.category).toBe('config');
+    expect(entry.writeTier.level).toBe(1);
   });
 });

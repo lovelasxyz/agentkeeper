@@ -21,9 +21,6 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Configure MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
       - name: Install bubblewrap
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
@@ -41,51 +38,25 @@ jobs:
       - run: npm run coverage
       - run: npm run clean
       - run: npm run build
-      # Gating on the declared full-support platforms only. Windows
-      # AppContainer is post-1.0 by design (spec §50, §63): reported on every
-      # release, never allowed to claim the platform works, and never allowed
-      # to block a release it was never in scope for.
+      # Gating on the declared full-support platforms. Windows ships no
+      # backend (its AppContainer canary never completed), so there is nothing
+      # to gate there — the platform reports UNPROTECTED.
       - name: Sandbox isolation tests
         if: runner.os != 'Windows'
-        run: npm run test:sandbox
-
-      - name: Sandbox isolation tests (Windows, not yet a release gate)
-        if: runner.os == 'Windows'
-        continue-on-error: true
         run: npm run test:sandbox
 
       - name: End-to-end install lifecycle
         if: runner.os != 'Windows'
         run: npm run test:e2e
-      - name: Upload Windows x64 boundary
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-windows-sandbox-x64
-          path: dist/native/win32-x64/agentkeeper-sandbox.exe
-          if-no-files-found: error
 
-  windows-arm64:
-    name: release Windows ARM64 boundary
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64_arm64
-      - run: node scripts/build-windows-sandbox.mjs arm64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-windows-sandbox-arm64
-          path: dist/native/win32-arm64/agentkeeper-sandbox.exe
-          if-no-files-found: error
+      # Same gate as ci.yml: a release may not ship a hot-path regression.
+      - name: Performance budget gate
+        if: runner.os != 'Windows'
+        run: node test/e2e/bench.mjs dist/cli.js --enforce
 
   publish:
     name: npm trusted publish
-    needs: [verify, windows-arm64]
+    needs: [verify]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,19 +72,11 @@ jobs:
       - run: npm ci
       - run: npm run clean
       - run: npm run build
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-windows-sandbox-x64
-          path: dist/native/win32-x64
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-windows-sandbox-arm64
-          path: dist/native/win32-arm64
       - run: npm run verify:package
 
       # The published tarball is proven from the archive listing, not from the
-      # working tree, and packed without re-running prepack so the downloaded
-      # Windows helpers survive into the artifact that ships.
+      # working tree, and packed without re-running prepack so the verified
+      # tree is exactly the tree that ships.
       - name: Verify the assembled tarball
         run: node scripts/verify-tarball.mjs
       - name: Generate release SBOM

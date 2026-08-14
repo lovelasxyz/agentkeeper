@@ -1,9 +1,8 @@
-import { access, readdir, readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  NATIVE_ARCHITECTURES,
-  NATIVE_HELPER,
+  FORBIDDEN_PACKAGE_PATH_PREFIXES,
   REQUIRED_PACKAGE_PATHS,
 } from './package-contract.mjs';
 
@@ -33,11 +32,20 @@ await Promise.all(
   }),
 );
 
-for (const architecture of NATIVE_ARCHITECTURES) {
-  const entries = await readdir(resolve(repository, 'dist/native', architecture));
-  const unexpected = entries.filter((entry) => entry !== NATIVE_HELPER);
-  if (unexpected.length > 0) {
-    throw new Error(`Unexpected native build artifacts for ${architecture}: ${unexpected.join(', ')}`);
+// A native helper under dist/native would mean the unproven Windows
+// AppContainer backend snuck back into the release. The platform must report
+// UNPROTECTED until a backend passes its own deny canary on real hardware.
+for (const prefix of FORBIDDEN_PACKAGE_PATH_PREFIXES) {
+  const exists = await access(resolve(repository, prefix), constants.R_OK).then(
+    () => true,
+    () => false,
+  );
+  if (exists) {
+    throw new Error(
+      `Refusing to package a native Windows backend: ${prefix} exists. The AppContainer ` +
+        'backend is not shipped while its deny canary has never completed; the platform ' +
+        'reports UNPROTECTED instead.',
+    );
   }
 }
 

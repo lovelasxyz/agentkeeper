@@ -175,6 +175,10 @@ export class TransactionalProtectionInstallationExecutor {
       await this.git.writeGlobalHooksPath(transition.after, transition.before);
       return;
     }
+    if (transition.restart === true) {
+      await this.services.restart(transition.registration, transition.before);
+      return;
+    }
     await this.services.setDesired(
       transition.registration,
       transition.after,

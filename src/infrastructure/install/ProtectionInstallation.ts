@@ -36,9 +36,21 @@ interface PlanningSnapshot {
   readonly replicaStateRaw: string | null;
   readonly gitHooksPath: string | null;
   readonly service: ServiceStatus;
+  /** Version the resident watcher announced; null when it never has. */
+  readonly runningWatcherVersion: string | null;
 }
 
 const GIT_STATE_SCHEMA = 'dev.agentkeeper.git-integration';
+
+/**
+ * The watcher's own report of what it is running. Supplying it lets `plan`
+ * turn "installed but running an older build" into a restart instead of a
+ * green light; omitting it keeps planning service-state-only.
+ */
+export interface WatcherVersionObservation {
+  readonly installedVersion: string;
+  readRunningVersion(): Promise<string | null>;
+}
 
 /**
  * Adds reboot-persistent monitoring and Git entry points to ManagedInstallation.
@@ -52,17 +64,19 @@ export class ProtectionInstallationPlanner {
     private readonly platform: Platform,
     private readonly services: ServiceController,
     private readonly git: GitConfigurationController,
+    private readonly watcher: WatcherVersionObservation | null = null,
   ) {}
 
   async plan(operation: InstallationOperation): Promise<ProtectionInstallationPlan> {
     const registration = serviceRegistration(this.base, this.platform);
-    const [manifestRaw, primaryStateRaw, replicaStateRaw, gitHooksPath, service] =
+    const [manifestRaw, primaryStateRaw, replicaStateRaw, gitHooksPath, service, runningWatcherVersion] =
       await Promise.all([
         this.files.read(this.manifestPath),
         this.files.read(this.gitStatePath),
         this.files.read(this.gitStateReplicaPath),
         this.git.readGlobalHooksPath(),
         this.services.inspect(registration),
+        this.watcher?.readRunningVersion() ?? Promise.resolve(null),
       ]);
     const snapshot: PlanningSnapshot = {
       manifestRaw,
@@ -70,6 +84,7 @@ export class ProtectionInstallationPlanner {
       replicaStateRaw,
       gitHooksPath,
       service,
+      runningWatcherVersion,
     };
     const installed = manifestRaw !== null;
 
@@ -112,7 +127,7 @@ export class ProtectionInstallationPlanner {
       operation,
       installed,
       registration,
-      snapshot.service,
+      snapshot,
       conflicts,
     );
     const externalChanges = orderTransitions(operation, gitTransition, serviceTransition);
@@ -284,9 +299,10 @@ export class ProtectionInstallationPlanner {
     operation: InstallationOperation,
     installed: boolean,
     registration: ServiceRegistration,
-    current: ServiceStatus,
+    snapshot: PlanningSnapshot,
     conflicts: InstallationConflict[],
   ): ServiceTransition | null {
+    const current = snapshot.service;
     if (!installed && current.registered) {
       conflicts.push(
         this.conflict(
@@ -308,7 +324,20 @@ export class ProtectionInstallationPlanner {
           }
         : null;
     }
-    if (current.registered && current.active && current.healthy) return null;
+    if (current.registered && current.active && current.healthy) {
+      if (this.watcherIsStale(snapshot)) {
+        return {
+          kind: 'service',
+          registration,
+          before: current,
+          after: 'active',
+          restart: true,
+          summary:
+            'Restart the watcher so it runs the installed version instead of the one it booted with',
+        };
+      }
+      return null;
+    }
     return {
       kind: 'service',
       registration,
@@ -316,6 +345,18 @@ export class ProtectionInstallationPlanner {
       after: 'active',
       summary: 'Register, start, and enable the agentkeeper watcher at login',
     };
+  }
+
+  /**
+   * An upgrade replaces the entrypoint on disk while the resident daemon keeps
+   * executing the code it booted with. A watcher that announced a different
+   * version than the installed one is running stale code behind a healthy
+   * service state, so activation must restart it rather than answer "already
+   * active". No announcement means there is nothing to restart from.
+   */
+  private watcherIsStale(snapshot: PlanningSnapshot): boolean {
+    if (this.watcher === null || snapshot.runningWatcherVersion === null) return false;
+    return snapshot.runningWatcherVersion !== this.watcher.installedVersion;
   }
 
   private conflictedPlan(

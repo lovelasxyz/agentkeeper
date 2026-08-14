@@ -33,6 +33,12 @@ export interface ServiceController {
     desired: 'active' | 'absent',
     expected?: ServiceStatus,
   ): Promise<void>;
+  /**
+   * Restarts a registered, active service so it picks up what is on disk now —
+   * the descriptor an upgrade just replaced and the code it points at. Unlike
+   * `setDesired('active')` this is never a no-op against a running service.
+   */
+  restart(registration: ServiceRegistration, expected?: ServiceStatus): Promise<void>;
   restore(registration: ServiceRegistration, status: ServiceStatus): Promise<void>;
 }
 
@@ -55,6 +61,8 @@ export interface ServiceTransition {
   readonly registration: ServiceRegistration;
   readonly before: ServiceStatus;
   readonly after: 'active' | 'absent';
+  /** True when the service is already active and must be restarted, not started. */
+  readonly restart?: boolean;
   readonly summary: string;
 }
 

@@ -1,5 +1,7 @@
 import { BaselineChange } from '../../domain/entities/BaselineChange.js';
 import type { Finding } from '../../domain/entities/Finding.js';
+import { NotificationBudget, NotificationPolicy, suppressNotification } from '../../domain/notification/NotificationPolicy.js';
+import type { NotificationPolicySpec } from '../../domain/notification/NotificationPolicy.js';
 import type { PathContext } from '../../domain/paths/PathContext.js';
 import type { RuleSwitches } from '../../domain/rules/RuleRegistry.js';
 import { Severity } from '../../domain/value-objects/Severity.js';
@@ -25,11 +27,7 @@ import { mapWithConcurrency } from '../services/BoundedConcurrency.js';
 
 const CONTENT_READ_CONCURRENCY = 8;
 
-export interface NotificationPolicy {
-  readonly maxPerWindow: number;
-  readonly windowMilliseconds: number;
-  readonly duplicateCooldownMilliseconds: number;
-}
+export type { NotificationPolicySpec as NotificationPolicy };
 
 export interface MonitorPersistenceDependencies {
   readonly files: FileSystem;
@@ -56,12 +54,6 @@ export interface MonitorPersistenceOutcome {
   readonly notifications: number;
 }
 
-const DEFAULT_NOTIFICATION_POLICY: NotificationPolicy = Object.freeze({
-  maxPerWindow: 5,
-  windowMilliseconds: 60_000,
-  duplicateCooldownMilliseconds: 15 * 60_000,
-});
-
 /**
  * Compares persistence state and advances trust conservatively.
  *
@@ -69,13 +61,18 @@ const DEFAULT_NOTIFICATION_POLICY: NotificationPolicy = Object.freeze({
  * applicable content-addressed decisions explicitly allow it. The daemon can
  * therefore restart, miss an event, or receive its own writes without ever
  * turning an alert into trust merely because it was observed once.
+ *
+ * Notification policy is decided in the domain (NotificationPolicy); this
+ * class only orchestrates the answer into audits and alerts.
  */
 export class MonitorPersistence {
   private readonly notifications: NotificationBudget;
 
   constructor(private readonly dependencies: MonitorPersistenceDependencies) {
     this.notifications = new NotificationBudget(
-      dependencies.notificationPolicy ?? DEFAULT_NOTIFICATION_POLICY,
+      NotificationPolicy.create(
+        dependencies.notificationPolicy ?? NotificationPolicy.STANDARD,
+      ),
     );
   }
 
@@ -210,14 +207,16 @@ export class MonitorPersistence {
         });
       }
 
-      const suppression = notificationSuppression(
-        pauseState,
-        state,
-        finding,
-        isDurablyAllowed(matchingDecision(decisionsByKey, finding), finding),
-        this.notifications,
-        now,
-      );
+      const suppression = suppressNotification({
+        paused: pauseState.status === 'active',
+        approvedHigh:
+          finding.severity.isAtLeast(Severity.HIGH) &&
+          (state === 'accepted' ||
+            isDurablyAllowed(matchingDecision(decisionsByKey, finding), finding)),
+        budget: this.notifications,
+        decisionKey: finding.decisionKey,
+        at: now,
+      });
       if (suppression !== null) {
         await audit.append({
           at: now,
@@ -330,24 +329,6 @@ function findingDetails(finding: Finding, sandboxActive: boolean): Record<string
   };
 }
 
-function notificationSuppression(
-  pause: PauseState,
-  resolution: 'safe' | 'accepted' | 'pending',
-  finding: Finding,
-  findingApproved: boolean,
-  budget: NotificationBudget,
-  now: Date,
-): 'paused' | 'approved' | 'duplicate' | 'rate-limit' | null {
-  if (pause.status === 'active') return 'paused';
-  if (
-    finding.severity.isAtLeast(Severity.HIGH) &&
-    (resolution === 'accepted' || findingApproved)
-  ) {
-    return 'approved';
-  }
-  return budget.claim(finding.decisionKey, now);
-}
-
 function matchingDecision(
   decisions: ReadonlyMap<string, Decision>,
   finding: Finding,
@@ -394,59 +375,4 @@ function sameIncidents(
       entry.lastSeenAt.getTime() === candidate.lastSeenAt.getTime()
     );
   });
-}
-
-class NotificationBudget {
-  private windowStartedAt: number | null = null;
-  private sentInWindow = 0;
-  private readonly recentlySent = new Map<string, number>();
-
-  constructor(private readonly policy: NotificationPolicy) {
-    if (
-      !Number.isSafeInteger(policy.maxPerWindow) ||
-      policy.maxPerWindow < 1 ||
-      policy.windowMilliseconds < 1 ||
-      policy.duplicateCooldownMilliseconds < 1
-    ) {
-      throw new Error('Notification limits must be positive integers');
-    }
-  }
-
-  claim(key: string, now: Date): 'duplicate' | 'rate-limit' | null {
-    const timestamp = now.getTime();
-    this.prune(timestamp);
-    const previous = this.recentlySent.get(key);
-    if (previous !== undefined && timestamp - previous < this.policy.duplicateCooldownMilliseconds) {
-      return 'duplicate';
-    }
-    if (
-      this.windowStartedAt === null ||
-      timestamp - this.windowStartedAt >= this.policy.windowMilliseconds
-    ) {
-      this.windowStartedAt = timestamp;
-      this.sentInWindow = 0;
-    }
-    if (this.sentInWindow >= this.policy.maxPerWindow) return 'rate-limit';
-    this.sentInWindow += 1;
-    this.recentlySent.set(key, timestamp);
-    this.enforceRecentBound();
-    return null;
-  }
-
-  private prune(now: number): void {
-    for (const [key, sentAt] of this.recentlySent) {
-      if (now - sentAt >= this.policy.duplicateCooldownMilliseconds) {
-        this.recentlySent.delete(key);
-      }
-    }
-  }
-
-  private enforceRecentBound(): void {
-    // A compromised stream of unique subjects must not grow the daemon forever.
-    while (this.recentlySent.size > 512) {
-      const oldest = this.recentlySent.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      this.recentlySent.delete(oldest);
-    }
-  }
 }

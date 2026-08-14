@@ -1,8 +1,7 @@
-declare const __AGENTKEEPER_VERSION__: string;
-
 import { AccessTierResolver } from '../domain/policy/AccessTierResolver.js';
 import { PolicyBuilder } from '../domain/policy/PolicyBuilder.js';
 import { SensitivePathRegistry } from '../domain/paths/SensitivePathRegistry.js';
+import { AGENTKEEPER_VERSION } from '../version.js';
 
 import { NodeFileSystem } from '../infrastructure/fs/NodeFileSystem.js';
 import { JsonDaemonRuntime } from '../infrastructure/store/JsonDaemonRuntime.js';
@@ -15,6 +14,7 @@ import {
 import {
   ConsoleLogger,
   DesktopNotifier,
+  NodeProcessLiveness,
   ProcessEnvironment,
   SilentLogger,
   SilentPrompter,
@@ -72,6 +72,7 @@ export class Container {
   readonly files = new NodeFileSystem();
   readonly logger: Logger;
   readonly prompter: Prompter;
+  readonly processLiveness = new NodeProcessLiveness();
 
   readonly paths: SensitivePathRegistry;
   readonly tiers: AccessTierResolver;
@@ -107,14 +108,12 @@ export class Container {
   }
 
   /**
-   * The published version, injected at build time.
-   *
-   * Declared here as well as on the router because the router resolves
-   * `--version` without ever building a container, and must not pull the whole
-   * composition graph onto the hook path to do it.
+   * The published version, injected at build time. The single declaration
+   * lives in `src/version.ts`; the router answers `--version` from the same
+   * module without ever building a container.
    */
   get version(): string {
-    return typeof __AGENTKEEPER_VERSION__ === 'string' ? __AGENTKEEPER_VERSION__ : '0.0.0-dev';
+    return AGENTKEEPER_VERSION;
   }
 
   get daemonRuntime(): JsonDaemonRuntime {
@@ -241,7 +240,9 @@ export class Container {
       fileExecution,
       protection,
       protectionExecution,
-      system,
+      processes,
+      gitConfiguration,
+      serviceControl,
     ] = await Promise.all([
       import('node:path'),
       import('../infrastructure/system/ExecutableResolver.js'),
@@ -249,7 +250,9 @@ export class Container {
       import('../application/use-cases/ExecuteInstallationPlan.js'),
       import('../infrastructure/install/ProtectionInstallation.js'),
       import('../application/use-cases/ExecuteProtectionInstallation.js'),
-      import('../infrastructure/install/SystemIntegrationAdapters.js'),
+      import('../infrastructure/install/NodeInstallationProcessExecutor.js'),
+      import('../infrastructure/install/ProcessGitConfigurationController.js'),
+      import('../infrastructure/install/PlatformServiceController.js'),
     ]);
     const home = this.files.realPath(this.environment.identityHome);
     const stateDir = home.join('.agentkeeper');
@@ -289,9 +292,9 @@ export class Container {
       profiles,
       claudeSettings: home.join('.claude/settings.json'),
     } as const;
-    const processes = new system.NodeInstallationProcessExecutor();
-    const git = new system.ProcessGitConfigurationController(processes);
-    const service = new system.PlatformServiceController(processes, {
+    const executor = new processes.NodeInstallationProcessExecutor();
+    const git = new gitConfiguration.ProcessGitConfigurationController(executor);
+    const service = new serviceControl.PlatformServiceController(executor, {
       ...(this.environment.platform === 'darwin' && typeof process.getuid === 'function'
         ? { launchdDomain: `gui/${process.getuid()}` }
         : {}),
@@ -302,6 +305,10 @@ export class Container {
       this.environment.platform,
       service,
       git,
+      {
+        installedVersion: this.version,
+        readRunningVersion: async () => (await this.daemonRuntime.read())?.version ?? null,
+      },
     );
     return {
       planner,

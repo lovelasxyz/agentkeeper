@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { budgetViolations } from './perf-budgets.mjs';
+
 /**
  * Measures the performance budgets of spec §12, in a clean process.
  *
@@ -18,14 +20,18 @@ import { join, resolve } from 'node:path';
  *    standard robust estimator for "what does this cost without contention",
  *    which is what a budget about our code should measure.
  *
- * Usage: node bench.mjs <path-to-cli> → one line of JSON on stdout.
+ * Usage: node bench.mjs <path-to-cli> [--enforce] → one line of JSON on stdout.
+ * With --enforce the run doubles as the CI gate: any measured figure over its
+ * budget in perf-budgets.mjs is reported on stderr and exits 1, so a hot-path
+ * regression fails the build instead of shipping silently.
  */
 
 // Absolute: the wrapper runs with the workspace as its cwd, so a relative
 // path would resolve against the wrong directory.
 const BIN = process.argv[2] === undefined ? undefined : resolve(process.argv[2]);
+const enforce = process.argv.includes('--enforce');
 if (BIN === undefined) {
-  process.stderr.write('usage: node bench.mjs <path-to-cli>\n');
+  process.stderr.write('usage: node bench.mjs <path-to-cli> [--enforce]\n');
   process.exit(2);
 }
 
@@ -110,24 +116,32 @@ try {
     ),
   );
 
-  process.stdout.write(
-    `${JSON.stringify({
-      bareNodeStartup: round(bareNode),
-      // `spawnFloor` is one bare start-up plus one sandboxed one, so what the
-      // sandbox binary itself adds is the floor minus two bare start-ups.
-      // Zero where no such binary exists, which is the honest figure there.
-      sandboxExecCost: round(spawnFloor - 2 * bareNode),
-      // Everything above one interpreter start-up: our modules, our I/O, our
-      // policy build. Node's own start-up is charged to any hook that is not a
-      // compiled binary and is reported separately rather than hidden.
-      hookOwnCost: round(hook - bareNode),
-      scanOwnCost: round(scan - bareNode),
-      // What the user feels in total when running an agent through the wrapper.
-      wrapperTotalOverhead: round(wrapper - bareNode),
-      // Of that, the part this project can actually do something about.
-      wrapperOwnCost: round(wrapper - spawnFloor),
-    })}\n`,
-  );
+  const measured = {
+    bareNodeStartup: round(bareNode),
+    // `spawnFloor` is one bare start-up plus one sandboxed one, so what the
+    // sandbox binary itself adds is the floor minus two bare start-ups.
+    // Zero where no such binary exists, which is the honest figure there.
+    sandboxExecCost: round(spawnFloor - 2 * bareNode),
+    // Everything above one interpreter start-up: our modules, our I/O, our
+    // policy build. Node's own start-up is charged to any hook that is not a
+    // compiled binary and is reported separately rather than hidden.
+    hookOwnCost: round(hook - bareNode),
+    scanOwnCost: round(scan - bareNode),
+    // What the user feels in total when running an agent through the wrapper.
+    wrapperTotalOverhead: round(wrapper - bareNode),
+    // Of that, the part this project can actually do something about.
+    wrapperOwnCost: round(wrapper - spawnFloor),
+  };
+  process.stdout.write(`${JSON.stringify(measured)}\n`);
+
+  const violations = budgetViolations(measured);
+  if (enforce && violations.length > 0) {
+    process.stderr.write(`performance budgets exceeded:\n  ${violations.join('\n  ')}\n`);
+    process.exit(1);
+  }
+  if (violations.length > 0) {
+    process.stderr.write(`note: outside budget: ${violations.join('; ')}\n`);
+  }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

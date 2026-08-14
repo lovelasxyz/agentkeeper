@@ -37,9 +37,10 @@ export class SensitivePathAccessRule extends ToolCallRule {
     const access = call.access;
     return call
       .paths()
-      .filter((path) => !this.tiers.tierOf(path, access, call.context).canBeGrantedAtRuntime)
-      .map((path) => {
-        const reason = this.tiers.explain(path, access, call.context);
+      .map((path) => ({ path, decision: this.tiers.decide(path, access, call.context) }))
+      .filter(({ decision }) => !decision.tier.canBeGrantedAtRuntime)
+      .map(({ path, decision }) => {
+        const reason = decision.explanation;
         return this.finding({
           title: this.title,
           detail:

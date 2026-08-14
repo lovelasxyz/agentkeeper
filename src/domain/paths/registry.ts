@@ -1,4 +1,4 @@
-import type { SensitivePathSpec } from './SensitivePath.js';
+import { SensitivePath } from './SensitivePath.js';
 import { POSIX_PLATFORMS, PLATFORMS } from '../value-objects/Platform.js';
 
 const ALL = PLATFORMS;
@@ -9,582 +9,486 @@ const WINDOWS = ['win32'] as const;
 
 /**
  * The single source of truth behind the B and P rule families and behind the
- * sandbox profile itself (spec §6.4). Data, not code: adding a path must never
+ * sandbox profile itself (spec §6.4). Rows, not code: adding a path must never
  * mean editing a rule.
  *
  * Every row carries a rationale because a registry nobody can audit is a
- * registry nobody trusts.
+ * registry nobody trusts. Tier and disposition are implied by the category
+ * constructors, so a weak credential row is unrepresentable rather than
+ * merely tested against.
  */
-export const SENSITIVE_PATHS: readonly SensitivePathSpec[] = Object.freeze([
-  // ── Credentials ────────────────────────────────────────────────────────────
-  {
+export const SENSITIVE_PATHS: readonly SensitivePath[] = Object.freeze([
+
+  SensitivePath.credential({
     id: 'ssh-keys',
     pattern: '~/.ssh/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Private keys grant access to every host and repository the user can reach.',
-  },
-  {
+    rationale:
+      'Private keys grant access to every host and repository the user can reach.',
+  }),
+
+  SensitivePath.credential({
     id: 'aws-credentials',
     pattern: '~/.aws/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Long-lived cloud access keys; a leak is an account takeover.',
-  },
-  {
+    rationale:
+      'Long-lived cloud access keys; a leak is an account takeover.',
+  }),
+
+  SensitivePath.credential({
     id: 'gcloud-credentials',
     pattern: '~/.config/gcloud/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Google Cloud refresh tokens and application default credentials.',
-  },
-  {
+    rationale:
+      'Google Cloud refresh tokens and application default credentials.',
+  }),
+
+  SensitivePath.credential({
     id: 'kube-config',
     pattern: '~/.kube/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Cluster certificates and tokens, usually with administrative rights.',
-  },
-  {
+    rationale:
+      'Cluster certificates and tokens, usually with administrative rights.',
+  }),
+
+  SensitivePath.credential({
     id: 'docker-config',
     pattern: '~/.docker/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Registry authentication tokens, and a daemon socket path on some setups.',
-  },
-  {
+    rationale:
+      'Registry authentication tokens, and a daemon socket path on some setups.',
+  }),
+
+  SensitivePath.credential({
     id: 'netrc',
     pattern: '~/.netrc',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Plaintext machine credentials used by curl, git and ftp clients.',
-  },
-  {
+    rationale:
+      'Plaintext machine credentials used by curl, git and ftp clients.',
+  }),
+
+  SensitivePath.credential({
     id: 'npmrc',
     pattern: '~/.npmrc',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Publish tokens; also a registry override that redirects every install.',
-  },
-  {
+    rationale:
+      'Publish tokens; also a registry override that redirects every install.',
+  }),
+
+  SensitivePath.credential({
     id: 'pypirc',
     pattern: '~/.pypirc',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'PyPI upload tokens, enough to publish a package under the user name.',
-  },
-  {
+    rationale:
+      'PyPI upload tokens, enough to publish a package under the user name.',
+  }),
+
+  SensitivePath.credential({
     id: 'gh-hosts',
     pattern: '~/.config/gh/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'GitHub CLI OAuth tokens with repository and workflow scope.',
-  },
-  {
+    rationale:
+      'GitHub CLI OAuth tokens with repository and workflow scope.',
+  }),
+
+  SensitivePath.credential({
     id: 'rclone-config',
     pattern: '~/.config/rclone/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Credentials for every configured remote storage backend.',
-  },
-  {
+    rationale:
+      'Credentials for every configured remote storage backend.',
+  }),
+
+  SensitivePath.credential({
     id: 'macos-keychain',
     pattern: '~/Library/Keychains/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: MAC,
-    rationale: "The user's credential store; everything they ever saved lives here.",
-  },
-  {
+    rationale:
+      "The user's credential store; everything they ever saved lives here.",
+  }),
+
+  SensitivePath.credential({
     // Outside the home directory, where the macOS profile still permits broad
     // reads. The file is world-readable by default, so nothing but this rule
     // keeps it from leaving with the agent.
     id: 'macos-system-keychain',
     pattern: '/Library/Keychains/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: MAC,
     rationale:
       'The machine-wide credential store: Wi-Fi and 802.1X secrets, and certificates whose private keys are guarded by a daemon that a stolen copy never has to ask.',
-  },
-  {
+  }),
+
+  SensitivePath.credential({
     id: 'macos-ssh-host-keys',
     pattern: '/private/etc/ssh/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: MAC,
     rationale:
       'Host private keys, present once Remote Login is enabled; they authenticate the machine itself.',
-  },
-  {
+  }),
+
+  SensitivePath.credential({
+    id: 'macos-root-home',
+    pattern: '/var/root/**',
+    platforms: MAC,
+    rationale:
+      "The superuser's home: an agent running with elevation finds credentials and history there.",
+  }),
+
+  SensitivePath.credential({
+    id: 'macos-local-account-db',
+    pattern: '/private/var/db/dslocal/**',
+    platforms: MAC,
+    rationale:
+      'The local account database; password hashes and account metadata for every user of the machine.',
+  }),
+
+  SensitivePath.credential({
     id: 'gnupg',
     pattern: '~/.gnupg/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Signing and encryption private keys.',
-  },
-  {
+    rationale:
+      'Signing and encryption private keys.',
+  }),
+
+  SensitivePath.credential({
     id: 'env-file-outside-workspace',
     pattern: '**/.env',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
     outsideWorkspaceOnly: true,
-    rationale: 'Another project’s environment file is the fastest route to its secrets.',
-  },
-  {
+    rationale:
+      'Another project’s environment file is the fastest route to its secrets.',
+  }),
+
+  SensitivePath.credential({
     id: 'env-variant-outside-workspace',
     pattern: '**/.env.*',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
     outsideWorkspaceOnly: true,
-    rationale: 'Environment overlays of neighbouring projects hold the same secrets.',
-  },
+    rationale:
+      'Environment overlays of neighbouring projects hold the same secrets.',
+  }),
 
-  // ── Browser profiles ───────────────────────────────────────────────────────
-  {
+  SensitivePath.credential({
     id: 'chrome-profile-macos',
     pattern: '~/Library/Application Support/Google/Chrome/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: MAC,
-    rationale: 'Session cookies and saved passwords of every logged-in service.',
-  },
-  {
+    rationale:
+      'Session cookies and saved passwords of every logged-in service.',
+  }),
+
+  SensitivePath.credential({
     id: 'chromium-profile-linux',
     pattern: '~/.config/google-chrome/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: LINUX,
-    rationale: 'Session cookies and saved passwords of every logged-in service.',
-  },
-  {
+    rationale:
+      'Session cookies and saved passwords of every logged-in service.',
+  }),
+
+  SensitivePath.credential({
     id: 'safari-profile',
     pattern: '~/Library/Safari/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: MAC,
-    rationale: 'Browsing history and site data, including authenticated sessions.',
-  },
-  {
+    rationale:
+      'Browsing history and site data, including authenticated sessions.',
+  }),
+
+  SensitivePath.credential({
     id: 'firefox-profile',
     pattern: '~/.mozilla/firefox/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'logins.json and cookies.sqlite hold decryptable saved credentials.',
-  },
-  {
+    rationale:
+      'logins.json and cookies.sqlite hold decryptable saved credentials.',
+  }),
+
+  SensitivePath.credential({
     id: 'chrome-profile-windows',
     pattern: '~/appdata/local/google/chrome/user data/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: WINDOWS,
-    rationale: 'Chrome cookies and saved sessions provide authenticated access to web services.',
-  },
-  {
+    rationale:
+      'Chrome cookies and saved sessions provide authenticated access to web services.',
+  }),
+
+  SensitivePath.credential({
     id: 'edge-profile-windows',
     pattern: '~/appdata/local/microsoft/edge/user data/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: WINDOWS,
-    rationale: 'Edge cookies and saved sessions provide authenticated access to web services.',
-  },
-  {
+    rationale:
+      'Edge cookies and saved sessions provide authenticated access to web services.',
+  }),
+
+  SensitivePath.credential({
     id: 'firefox-profile-windows',
     pattern: '~/appdata/roaming/mozilla/firefox/**',
-    category: 'credential',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: WINDOWS,
-    rationale: 'Firefox profiles contain saved logins, cookies and authenticated sessions.',
-  },
+    rationale:
+      'Firefox profiles contain saved logins, cookies and authenticated sessions.',
+  }),
 
-  // ── Persistence (vector V9) ────────────────────────────────────────────────
-  {
+  SensitivePath.persistence({
     id: 'zsh-env',
     pattern: '~/.zshenv',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Read by every zsh invocation including non-interactive ones: the best foothold on macOS.',
-  },
-  {
+    rationale:
+      'Read by every zsh invocation including non-interactive ones: the best foothold on macOS.',
+  }),
+
+  SensitivePath.persistence({
     id: 'zsh-rc',
     pattern: '~/.zshrc',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Runs on every interactive shell; survives deletion of the repository.',
-  },
-  {
+    rationale:
+      'Runs on every interactive shell; survives deletion of the repository.',
+  }),
+
+  SensitivePath.persistence({
     id: 'bash-rc',
     pattern: '~/.bashrc',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Runs on every interactive bash shell.',
-  },
-  {
+    rationale:
+      'Runs on every interactive bash shell.',
+  }),
+
+  SensitivePath.persistence({
     id: 'bash-profile',
     pattern: '~/.bash_profile',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Runs on every bash login shell.',
-  },
-  {
+    rationale:
+      'Runs on every bash login shell.',
+  }),
+
+  SensitivePath.persistence({
     id: 'sh-profile',
     pattern: '~/.profile',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Runs on login for every POSIX shell.',
-  },
-  {
+    rationale:
+      'Runs on login for every POSIX shell.',
+  }),
+
+  SensitivePath.persistence({
     id: 'fish-config',
     pattern: '~/.config/fish/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'config.fish and conf.d run on every fish shell start.',
-  },
-  {
+    rationale:
+      'config.fish and conf.d run on every fish shell start.',
+  }),
+
+  SensitivePath.persistence({
     id: 'git-config',
     pattern: '~/.gitconfig',
-    category: 'persistence',
     // Reading is what makes `git` usable at all — measured, not assumed: with
     // the file unreadable git refuses every command. Writing installs
     // core.hooksPath, which is vector V9, so it stays out of runtime reach.
     readTier: 1,
-    writeTier: 2,
     onRead: 'observe',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'core.hooksPath, credential.helper and shell aliases each execute code.',
-  },
-  {
+    rationale:
+      'core.hooksPath, credential.helper and shell aliases each execute code.',
+  }),
+
+  SensitivePath.persistence({
     id: 'git-config-xdg',
     pattern: '~/.config/git/**',
-    category: 'persistence',
     readTier: 1,
-    writeTier: 2,
     onRead: 'observe',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'XDG location of the same git configuration.',
-  },
-  {
+    rationale:
+      'XDG location of the same git configuration.',
+  }),
+
+  SensitivePath.persistence({
     id: 'ssh-authorized-keys',
     pattern: '~/.ssh/authorized_keys',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Appending a key grants permanent remote access to the machine.',
-  },
-  {
+    rationale:
+      'Appending a key grants permanent remote access to the machine.',
+  }),
+
+  SensitivePath.persistence({
     id: 'ssh-client-config',
     pattern: '~/.ssh/config',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'ProxyCommand and LocalCommand execute on every outgoing connection.',
-  },
-  {
+    rationale:
+      'ProxyCommand and LocalCommand execute on every outgoing connection.',
+  }),
+
+  SensitivePath.persistence({
     id: 'launch-agents',
     pattern: '~/Library/LaunchAgents/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: MAC,
-    rationale: 'A plist here runs at every login without any further user action.',
-  },
-  {
+    rationale:
+      'A plist here runs at every login without any further user action.',
+  }),
+
+  SensitivePath.persistence({
     id: 'systemd-user-units',
     pattern: '~/.config/systemd/user/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: LINUX,
-    rationale: 'A user unit starts at login and restarts itself on failure.',
-  },
-  {
+    rationale:
+      'A user unit starts at login and restarts itself on failure.',
+  }),
+
+  SensitivePath.persistence({
     id: 'powershell-core-profile',
     pattern: '~/documents/powershell/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: WINDOWS,
-    rationale: 'PowerShell profile scripts execute whenever a PowerShell session starts.',
-  },
-  {
+    rationale:
+      'PowerShell profile scripts execute whenever a PowerShell session starts.',
+  }),
+
+  SensitivePath.persistence({
     id: 'windows-powershell-profile',
     pattern: '~/documents/windowspowershell/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: WINDOWS,
-    rationale: 'Windows PowerShell profile scripts execute whenever a legacy session starts.',
-  },
-  {
+    rationale:
+      'Windows PowerShell profile scripts execute whenever a legacy session starts.',
+  }),
+
+  SensitivePath.persistence({
     id: 'windows-startup-folder',
     pattern: '~/appdata/roaming/microsoft/windows/start menu/programs/startup/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: WINDOWS,
-    rationale: 'Programs placed in the per-user Startup folder execute at every login.',
-  },
-  {
+    rationale:
+      'Programs placed in the per-user Startup folder execute at every login.',
+  }),
+
+  SensitivePath.persistence({
     id: 'crontab-macos',
     pattern: '/private/var/at/tabs/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: MAC,
-    rationale: 'Scheduled execution that outlives the session.',
-  },
-  {
+    rationale:
+      'Scheduled execution that outlives the session.',
+  }),
+
+  SensitivePath.persistence({
     id: 'crontab-linux',
     pattern: '/var/spool/cron/**',
-    category: 'persistence',
     readTier: 2,
-    writeTier: 2,
     onRead: 'block',
-    onWrite: 'block',
     platforms: LINUX,
-    rationale: 'Scheduled execution that outlives the session.',
-  },
+    rationale:
+      'Scheduled execution that outlives the session.',
+  }),
 
-  // ── Shell history (vector V10) ─────────────────────────────────────────────
-  {
+  SensitivePath.history({
     id: 'zsh-history',
     pattern: '~/.zsh_history',
-    category: 'history',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Command lines regularly contain tokens pasted as arguments.',
-  },
-  {
+    rationale:
+      'Command lines regularly contain tokens pasted as arguments.',
+  }),
+
+  SensitivePath.history({
     id: 'bash-history',
     pattern: '~/.bash_history',
-    category: 'history',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Command lines regularly contain tokens pasted as arguments.',
-  },
-  {
+    rationale:
+      'Command lines regularly contain tokens pasted as arguments.',
+  }),
+
+  SensitivePath.history({
     id: 'psql-history',
     pattern: '~/.psql_history',
-    category: 'history',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: POSIX,
-    rationale: 'Database queries with embedded connection strings and data.',
-  },
-  {
+    rationale:
+      'Database queries with embedded connection strings and data.',
+  }),
+
+  SensitivePath.history({
     id: 'node-repl-history',
     pattern: '~/.node_repl_history',
-    category: 'history',
-    readTier: 2,
-    writeTier: 2,
-    onRead: 'block',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'REPL sessions frequently contain pasted keys.',
-  },
+    rationale:
+      'REPL sessions frequently contain pasted keys.',
+  }),
 
-  // ── Agent and agentkeeper configuration (vectors V2, V8; rules B003/B005) ──
-  {
+  SensitivePath.persistence({
     id: 'claude-settings',
     pattern: '~/.claude/settings*.json',
-    category: 'persistence',
     readTier: 1,
-    writeTier: 2,
     onRead: 'observe',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'SessionStart and PreToolUse hooks here run on the next agent start.',
-  },
-  {
+    rationale:
+      'SessionStart and PreToolUse hooks here run on the next agent start.',
+  }),
+
+  SensitivePath.persistence({
     id: 'claude-config',
     pattern: '~/.claude.json',
-    category: 'persistence',
     readTier: 1,
-    writeTier: 2,
     onRead: 'observe',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Global agent configuration, including approved MCP servers.',
-  },
-  {
+    rationale:
+      'Global agent configuration, including approved MCP servers.',
+  }),
+
+  SensitivePath.persistence({
     id: 'gemini-settings',
     pattern: '~/.gemini/settings.json',
-    category: 'persistence',
     readTier: 1,
-    writeTier: 2,
     onRead: 'observe',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Global agent configuration, including tool and MCP permissions.',
-  },
-  {
+    rationale:
+      'Global agent configuration, including tool and MCP permissions.',
+  }),
+
+  SensitivePath.persistence({
     id: 'cursor-mcp',
     pattern: '~/.cursor/mcp.json',
-    category: 'persistence',
     readTier: 1,
-    writeTier: 2,
     onRead: 'observe',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'MCP server definitions execute an arbitrary command at session start.',
-  },
-  {
+    rationale:
+      'MCP server definitions execute an arbitrary command at session start.',
+  }),
+
+  SensitivePath.persistence({
     id: 'agentkeeper-state',
     pattern: '~/.agentkeeper/**',
-    category: 'persistence',
     readTier: 1,
-    writeTier: 2,
     onRead: 'observe',
-    onWrite: 'block',
     platforms: ALL,
-    rationale: 'Self-protection: an agent that can edit its own allowlist has none.',
-  },
+    rationale:
+      'Self-protection: an agent that can edit its own allowlist has none.',
+  }),
 
-  // ── Ordinary developer configuration (tier 1) ─────────────────────────────
-  {
+  SensitivePath.configuration({
     id: 'xdg-tool-config',
     pattern: '~/.config/**',
-    category: 'config',
     readTier: 1,
     writeTier: 1,
     onRead: 'observe',
     onWrite: 'observe',
     platforms: POSIX,
-    rationale: 'Editor and tool settings: useful to the agent, cheap to grant, no secrets by itself.',
-  },
+    rationale:
+      'Editor and tool settings: useful to the agent, cheap to grant, no secrets by itself.',
+  }),
+
 ]);

@@ -122,4 +122,64 @@ describe('AccessTierResolver', () => {
       expect(resolver.explain(at('~/projects/app/README.md'), 'read', CTX)).toBeNull();
     });
   });
+
+  describe('one decision, one walk over the registry', () => {
+    const countingRegistry = () => {
+      let evaluations = 0;
+      const real = SensitivePathRegistry.default();
+      return {
+        evaluations: () => evaluations,
+        registry: {
+          matching: (path: AbsolutePath, context: PathContext) => {
+            evaluations += 1;
+            return real.matching(path, context);
+          },
+          dangerousFor: real.dangerousFor.bind(real),
+        } as Pick<SensitivePathRegistry, 'matching' | 'dangerousFor'> as SensitivePathRegistry,
+      };
+    };
+
+    it('derives tier, disposition and explanation from a single match set', () => {
+      const counter = countingRegistry();
+      const counted = new AccessTierResolver(counter.registry);
+
+      const decision = counted.decide(at('~/.ssh/id_rsa'), 'read', CTX);
+
+      expect(counter.evaluations()).toBe(1);
+      expect(decision.tier).toBe(AccessTier.DANGEROUS);
+      expect(decision.disposition).toBe(Disposition.BLOCK);
+      expect(decision.explanation?.id).toBe('ssh-keys');
+      // Deriving further answers from the same decision evaluates nothing more.
+      expect(counter.evaluations()).toBe(1);
+    });
+
+    it('evaluates the registry once per question, including runtime grants', () => {
+      const counter = countingRegistry();
+      const counted = new AccessTierResolver(counter.registry);
+      const before = counter.evaluations();
+
+      counted.canGrantAtRuntime(ResourceRef.subtree(at('~/projects')), 'read', CTX);
+
+      expect(counter.evaluations()).toBe(before + 1);
+    });
+
+    it('does not recompute the tier 2 anchors while the registry and home stand', () => {
+      const real = SensitivePathRegistry.default();
+      let anchorCalls = 0;
+      const counting = {
+        matching: real.matching.bind(real),
+        dangerousFor: (platform: PathContext['platform'], access: 'read' | 'write') => {
+          anchorCalls += 1;
+          return real.dangerousFor(platform, access);
+        },
+      } as unknown as SensitivePathRegistry;
+      const counted = new AccessTierResolver(counting);
+      const subtree = ResourceRef.subtree(at('~/projects'));
+
+      counted.canGrantAtRuntime(subtree, 'read', CTX);
+      counted.canGrantAtRuntime(subtree, 'read', CTX);
+
+      expect(anchorCalls).toBe(1);
+    });
+  });
 });

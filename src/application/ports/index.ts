@@ -53,6 +53,15 @@ export interface Clock {
   now(): Date;
 }
 
+/**
+ * Whether a process exists, observed rather than assumed. Signal 0 performs
+ * the permission and existence check without delivering a signal; EPERM means
+ * the process exists and belongs to someone else, which is still alive.
+ */
+export interface ProcessLiveness {
+  isAlive(pid: number): boolean;
+}
+
 export interface Environment {
   /** Home selected by the caller; used only for host-side state compatibility. */
   readonly home: AbsolutePath;
@@ -128,6 +137,36 @@ export interface BaselineEntry {
 export interface BaselineStore {
   load(): Promise<readonly BaselineEntry[]>;
   save(entries: readonly BaselineEntry[]): Promise<void>;
+}
+
+/** The resident watcher's report of what it actually watches. */
+export interface DaemonWatchCoverage {
+  readonly status: 'protected' | 'degraded';
+  readonly reasons: readonly string[];
+}
+
+/** What the resident watcher is actually running, as opposed to what is installed. */
+export interface DaemonRuntimeRecord {
+  readonly pid: number;
+  readonly version: string;
+  readonly startedAt: string;
+  /**
+   * What the live watch session covers. Degradation recorded only in the
+   * audit log is halfway to a false green; carrying it here lets `doctor`
+   * quote it.
+   */
+  readonly coverage?: DaemonWatchCoverage;
+}
+
+/**
+ * The resident watcher's self-report. Upgrading the package replaces the
+ * entrypoint on disk while the running daemon keeps the code it booted with;
+ * this record is how the rest of the product tells the two apart.
+ */
+export interface DaemonRuntimeStore {
+  announce(record: DaemonRuntimeRecord): Promise<void>;
+  /** `null` when no watcher has announced itself, or the record is unusable. */
+  read(): Promise<DaemonRuntimeRecord | null>;
 }
 
 export type { SandboxRunner, SandboxCommand, SandboxCapabilities, SandboxMechanism, SandboxRunResult } from './SandboxRunner.js';

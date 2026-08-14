@@ -7,8 +7,8 @@ import {
   NodeWatchService,
   type DirectoryWatcher,
   type WatchDirectory,
-  type WatchTarget,
 } from '../../../src/infrastructure/watch/NodeWatchService.js';
+import type { WatchTarget } from '../../../src/application/ports/PersistenceMonitor.js';
 import { AbsolutePath } from '../../../src/domain/value-objects/AbsolutePath.js';
 
 const temporaryRoots: string[] = [];

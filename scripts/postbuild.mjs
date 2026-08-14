@@ -1,6 +1,5 @@
 import { build } from 'esbuild';
 import { chmod, readFile } from 'node:fs/promises';
-import { buildWindowsSandbox } from './build-windows-sandbox.mjs';
 
 const { version } = JSON.parse(
   await readFile(new URL('../package.json', import.meta.url), 'utf8'),
@@ -41,5 +40,4 @@ await build({
 });
 
 if (process.platform !== 'win32') await chmod(out, 0o755);
-await buildWindowsSandbox();
 console.log('postbuild: bundled CLI ready at', out);

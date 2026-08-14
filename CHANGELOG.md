@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **An upgrade now reaches the watcher on its own.** Two mechanisms, because
+  the failure had two halves. `activate` and `repair` compare the version the
+  running daemon announced with the installed one and restart the service when
+  they differ — no more `deactivate` first. And the daemon itself reads the
+  installed manifest once a minute and, on proof of a newer package, exits
+  with a code the service manager restarts (launchd `KeepAlive`, systemd
+  `on-failure`): the next process starts from the new entrypoint. A shipped
+  fix can no longer sit inert behind a green report.
+- **The lifecycle e2e runs where the product is installed.** The service
+  manager is reached through a file-backed fake installed by a module
+  resolution hook — the same mechanism the identity home already used — so
+  `launchctl`/`systemctl` calls are answered without touching the real user
+  session. The suite proves it by observing the fake's recorded state, and the
+  precondition check that excluded exactly the machines that matter is gone.
+- **Performance budgets are a gate, not a remark.** `bench.mjs --enforce`
+  compares the measured figures with the declared budgets and fails the build
+  on any exceedance; it runs in both CI and the release pipeline on the
+  full-support platforms. A hot-path regression can no longer ship silently.
+
+### Changed
+
+- **The service controller is three strategies, not one file with switches.**
+  launchd, systemd and Task Scheduler each own their settle semantics and
+  their contract test, behind the unchanged `ServiceController` port. The
+  launchd release race hid inside the interleaved version for three releases.
+- **`AccessTierResolver` answers one question once per decision.** Tier,
+  disposition and explanation derive from a single registry walk, and the
+  tier 2 anchors are computed once per home rather than per call. The class
+  comment used to say a second answer is how a security model loses; the code
+  now agrees with it.
+- **Registry invariants are enforced by construction.** Credential and history
+  entries take no tier parameters at all; a persistence entry chooses only its
+  read side. The most security-sensitive data structure in the project can no
+  longer be weakened by a typo.
+- **Notification policy lives in the domain.** Rate, cooldown and fairness are
+  a value object with its own tests; the persistence use case orchestrates
+  the answer instead of deciding it.
+- **Process liveness is a port.** `doctor` asks the container rather than
+  calling `signal 0` inline, so the watcher-state branches are exercised
+  through the command in the e2e suite, not only through a pure helper.
+- **Watch scopes are computed once per context**, not rebuilt on every
+  comparison cycle.
+- **A degraded watcher is quoted by `doctor`, not only logged.** The daemon's
+  self-report now carries its live watch coverage, and `doctor` prints each
+  degradation reason — a gap visible only in the audit log is halfway to a
+  false green.
+- **The system stores outside home are explicit tier 2 denies.** `/var/root`
+  and the local account database (`/private/var/db/dslocal`) joined the machine
+  keychain and the SSH host keys; the keychain is probed live in the isolation
+  suite, directly and through the `/System/Volumes/Data` firmlink.
+
+### Removed
+
+- **The Windows AppContainer backend.** Its confined child never exited and
+  the deny canary timed out on every run; without a Windows machine with a
+  debugger the cause could not be found, and a boundary nobody has observed
+  holding is not a boundary. The package refuses to ship any native helper,
+  Windows reports `UNPROTECTED` with a stable reason code, and the detection
+  layer — hook, git chain, watcher — still works there. The backend returns
+  when its canary passes on real hardware, gated like the other two.
+
 ## 1.0.4
 
 ### Fixed

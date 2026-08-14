@@ -73,38 +73,41 @@ describe('build and CI portability', () => {
     );
   });
 
-  it('runs the portable verification surface on Windows CI', () => {
+  it('keeps Windows CI to the portable verification surface: build and tests, no backend', () => {
+    // The AppContainer backend is not shipped (production-readiness P0.1), so
+    // there is nothing to compile and nothing to run a sandbox suite against.
+    // Windows CI still earns its place: typecheck, architecture, the unit and
+    // integration suites, and a clean build — the cross-platform parts.
     const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8');
 
     expect(workflow).toMatch(/windows-latest/);
     expect(workflow).toMatch(/npm run clean/);
     expect(workflow).toMatch(/npm run build/);
-    expect(workflow).toMatch(/msvc-dev-cmd/);
-    expect(workflow).toMatch(/npm run test:sandbox/);
+    expect(workflow).not.toMatch(/msvc-dev-cmd/);
 
-    // The real-boundary suite gates the declared full-support platforms and is
-    // reported-but-not-gating on Windows, which the spec scopes to post-1.0.
-    // In *both* workflows exactly one step may be non-blocking, and it must be
-    // that one: a relaxation anywhere else would quietly stop gating a release.
-    // `\s+` rather than `\n`: a Windows checkout delivers CRLF, and asserting
-    // on the separator would fail on the very platform this step describes.
+    // No step anywhere may be advisory: a continue-on-error is a gate that
+    // does not gate, and on a security product that is how a platform ships
+    // broken while looking green.
     for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
       const text = readFileSync(join(repository, relative), 'utf8');
-      expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(1);
-      expect(text, relative).toMatch(
-        /Sandbox isolation tests \(Windows[^\r\n]*\s+if: runner\.os == 'Windows'\s+continue-on-error: true/,
-      );
+      expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(0);
     }
   });
 
-  it('places the Windows native sandbox helper in the package assembled on Linux', () => {
-    const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8');
+  it('refuses to package a native Windows backend', () => {
+    // Shipping the helper while its canary never completes would let the
+    // platform claim a boundary it cannot prove. The package gate rejects any
+    // native artifact, and no workflow assembles one anymore.
+    const verifier = readFileSync(join(repository, 'scripts/verify-package.mjs'), 'utf8');
+    expect(verifier).toMatch(/dist\/native/);
 
-    expect(workflow).toMatch(/upload-artifact/);
-    expect(workflow).toMatch(/download-artifact/);
-    expect(workflow).toMatch(/agentkeeper-sandbox\.exe/);
-    expect(workflow).toMatch(/win32-arm64/);
-    // Packing must not re-run prepack: a rebuild after the download would
+    for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
+      const workflow = readFileSync(join(repository, relative), 'utf8');
+      expect(workflow, relative).not.toMatch(/agentkeeper-sandbox\.exe/);
+      expect(workflow, relative).not.toMatch(/win32-arm64/);
+      expect(workflow, relative).not.toMatch(/msvc-dev-cmd/);
+    }
+    // Packing must not re-run prepack: a rebuild after verification would
     // decide the tarball contents from a different tree than the one verified.
     // The verifier owns that flag now, so assert it where it actually lives.
     expect(readFileSync(join(repository, 'scripts/verify-tarball.mjs'), 'utf8')).toMatch(
@@ -112,7 +115,7 @@ describe('build and CI portability', () => {
     );
   });
 
-  it('proves the assembled tarball itself carries both Windows helpers', () => {
+  it('proves the assembled tarball itself, not npm output', () => {
     for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
       const workflow = readFileSync(join(repository, relative), 'utf8');
       expect(workflow, relative).toMatch(/verify-tarball\.mjs/);
@@ -134,31 +137,22 @@ describe('build and CI portability', () => {
 
     const root = mkdtempSync(join(tmpdir(), 'agentkeeper-tar-'));
     temporaryRoots.push(root);
-    mkdirSync(join(root, 'package/dist/native/win32-x64'), { recursive: true });
-    writeFileSync(join(root, 'package/dist/native/win32-x64/agentkeeper-sandbox.exe'), 'MZ');
+    mkdirSync(join(root, 'package/dist'), { recursive: true });
+    writeFileSync(join(root, 'package/dist/cli.js'), '#!/usr/bin/env node\n');
     writeFileSync(join(root, 'package/README.md'), '# hi\n');
     execFileSync('tar', ['-czf', join(root, 'sample.tgz'), '-C', root, 'package']);
 
     const entries = listTarEntries(readFileSync(join(root, 'sample.tgz')) as Buffer);
     expect(entries).toContain('package/README.md');
-    expect(entries).toContain('package/dist/native/win32-x64/agentkeeper-sandbox.exe');
+    expect(entries).toContain('package/dist/cli.js');
 
     // The `package/` prefix must not hide a required path, and a genuinely
-    // absent helper must still be reported.
+    // absent artifact must still be reported.
     const missing = missingArtifacts(entries);
     expect(missing).not.toContain('README.md');
-    expect(missing).toContain('dist/native/win32-arm64/agentkeeper-sandbox.exe');
-    expect(missingArtifacts([])).toHaveLength(9);
-  });
-
-  it('keeps the compiler intermediate out of the packaged native directory', () => {
-    const builder = readFileSync(join(repository, 'scripts/build-windows-sandbox.mjs'), 'utf8');
-
-    // /Fo next to /Fe would leave an .obj inside dist/native, which the package
-    // gate rejects as an unexpected artifact — a Windows `npm pack` would fail.
-    expect(builder).toMatch(/objectDirectory/);
-    expect(builder).not.toMatch(/`\/Fo\$\{join\(outputDirectory/);
-    expect(readFileSync(join(repository, 'scripts/clean.mjs'), 'utf8')).toMatch(/'build'/);
+    expect(missing).not.toContain('dist/cli.js');
+    expect(missing).toContain('dist/index.js');
+    expect(missingArtifacts([])).toHaveLength(7);
   });
 
   it('ships the documentation set the spec requires, linked from the README', () => {
@@ -192,10 +186,5 @@ describe('build and CI portability', () => {
       expect(router, `router lost the ${verb} verb`).toContain(`name: '${verb}'`);
       expect(readme, `README does not mention ${verb}`).toContain(`agentkeeper ${verb}`);
     }
-  });
-
-  it('does not chmod the Windows build artifact', () => {
-    const postbuild = readFileSync(join(repository, 'scripts/postbuild.mjs'), 'utf8');
-    expect(postbuild).toMatch(/process\.platform\s*!==\s*['"]win32['"]/);
   });
 });

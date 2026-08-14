@@ -382,3 +382,54 @@ describe('resident watcher self-report', () => {
     expect(daemonRuntimeState(await runtime.read(), '1.0.3', alive)).toBe('absent');
   });
 });
+
+describe('watcher coverage self-report', () => {
+  it('round-trips the coverage the daemon announced, so doctor can quote it', async () => {
+    const files = new InMemoryFileSystem();
+    const runtime = new JsonDaemonRuntime(files, STATE);
+
+    await runtime.announce({
+      pid: 4242,
+      version: '1.0.5',
+      startedAt: '2026-08-13T11:13:43.000Z',
+      coverage: {
+        status: 'degraded',
+        reasons: ['/private/var/at/tabs recursive coverage failed: EACCES'],
+      },
+    });
+
+    const record = await runtime.read();
+    expect(record?.coverage).toEqual({
+      status: 'degraded',
+      reasons: ['/private/var/at/tabs recursive coverage failed: EACCES'],
+    });
+  });
+
+  it('keeps a valid record when the coverage field is malformed, dropping only it', async () => {
+    // A partial truth must not erase the whole self-report: the watcher's
+    // pid and version still answer what is running even when coverage is junk.
+    const files = new InMemoryFileSystem();
+    await files.write(
+      STATE.join('daemon.json'),
+      JSON.stringify({
+        pid: 4242,
+        version: '1.0.5',
+        startedAt: '2026-08-13T11:13:43.000Z',
+        coverage: { status: 'everything-is-fine' },
+      }),
+    );
+    const runtime = new JsonDaemonRuntime(files, STATE);
+
+    const record = await runtime.read();
+    expect(record?.version).toBe('1.0.5');
+    expect(record?.coverage).toBeUndefined();
+  });
+
+  it('reads older records without a coverage field as uncovered-not-degraded', async () => {
+    const files = new InMemoryFileSystem();
+    const runtime = new JsonDaemonRuntime(files, STATE);
+    await runtime.announce({ pid: 4242, version: '1.0.4', startedAt: '2026-08-13T11:13:43.000Z' });
+
+    expect((await runtime.read())?.coverage).toBeUndefined();
+  });
+});

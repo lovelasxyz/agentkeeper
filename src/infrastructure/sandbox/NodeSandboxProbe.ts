@@ -78,9 +78,6 @@ export class NodeSandboxProbe implements SandboxProbe {
           HOME: home.value,
           TMPDIR: probeTemp.value,
           PATH: process.env['PATH'] ?? '/usr/bin:/bin',
-          ...(request.platform === 'win32'
-            ? windowsProbeEnvironment(home.value, probeTemp.value)
-            : {}),
         },
       }), CANARY_TIMEOUT_MS, () => {
         timedOut = true;
@@ -130,23 +127,6 @@ function withDeadline<T>(
       },
     );
   });
-}
-
-function windowsProbeEnvironment(
-  home: string,
-  temporaryDirectory: string,
-): Readonly<Record<string, string>> {
-  const inherited = Object.fromEntries(
-    ['SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT']
-      .map((name) => [name, process.env[name]] as const)
-      .filter((entry): entry is readonly [string, string] => entry[1] !== undefined),
-  );
-  return {
-    ...inherited,
-    USERPROFILE: home,
-    TEMP: temporaryDirectory,
-    TMP: temporaryDirectory,
-  };
 }
 
 function canaryScript(allowedPath: string, deniedPath: string): string {

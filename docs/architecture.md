@@ -36,7 +36,7 @@ edge that goes the other way (`npm run lint:arch`).
 |---|---|---|
 | `domain/` | Policy, tiers, sensitive-path registry, rules, value objects | `domain/` only, plus `node:crypto`, `node:path`, `node:assert` |
 | `application/` | Use cases and the ports they need | `domain/`, `application/` |
-| `infrastructure/` | Adapters: Seatbelt, bubblewrap, AppContainer, stores, broker, installer | `domain/`, `application/` |
+| `infrastructure/` | Adapters: Seatbelt, bubblewrap, stores, broker, installer | `domain/`, `application/` |
 | `presentation/` | CLI commands, rendering, daemon entry point | everything except other presentation internals |
 | `composition/` | `Container` — the only place adapters are chosen | everything |
 
@@ -64,8 +64,8 @@ implementation that never varies.
    ambient authority, then the launcher sets the few variables it owns —
    `HOME`, `TMPDIR`, proxy variables, `AGENTKEEPER_ACTIVE`.
 6. **Backend compile.** The platform runner turns the policy into a Seatbelt
-   profile, bubblewrap arguments, or an AppContainer request. Anything the
-   backend cannot express is reported by `unenforceable()` and refuses the run.
+   profile or bubblewrap arguments. Anything the backend cannot express is
+   reported by `unenforceable()` and refuses the run.
 7. **Execute.** The agent starts inside the boundary. Its shell, MCP servers,
    `npm` lifecycle scripts and subprocesses inherit it, because inheritance is
    a property of the OS mechanism rather than of a hook.
@@ -76,7 +76,7 @@ Every OS-facing capability is a port in `application/ports/`:
 
 | Port | Adapter |
 |---|---|
-| `SandboxRunner` | `SeatbeltRunner`, `BubblewrapRunner`, `WindowsSandboxRunner` |
+| `SandboxRunner` | `SeatbeltRunner`, `BubblewrapRunner` (no Windows runner ships — see [platform support](platform-support.md)) |
 | `SandboxProbe` | `NodeSandboxProbe` — runs the deny canary for real |
 | `NetworkBroker` | `NodeDestinationBroker` |
 | `NetworkProbe` | `NodeNetworkProbe` — proves the broker allows and refuses |
@@ -90,10 +90,9 @@ binary into a reassuring message.
 ## Double validation
 
 The TypeScript control plane validates hard invariants, and the platform
-backend validates them again before it acts. On Windows the native helper
-re-parses the request and refuses anything that does not match the AppContainer
-model it is willing to build. A bug in the control plane must not be able to
-widen tier 2.
+backend validates them again before it acts: each runner refuses a policy shape
+it cannot express rather than approximating it. A bug in the control plane
+must not be able to widen tier 2.
 
 ## The CLI
 

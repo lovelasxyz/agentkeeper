@@ -120,12 +120,6 @@ const bubblewrap = new FakeRunner({
   networkGranularity: 'all-or-nothing',
 });
 
-const appContainer = new FakeRunner({
-  mechanism: 'appcontainer',
-  fileModel: 'appcontainer-allowlist',
-  networkGranularity: 'all-or-nothing',
-});
-
 describe('AssessProtection', () => {
   it('marks current Seatbelt as DEGRADED after a passing canary because system reads are broad', async () => {
     const probe = new FixedProbe();
@@ -174,79 +168,6 @@ describe('AssessProtection', () => {
       'platform.windows-runner-unavailable',
     );
     expect(probe.calls).toBe(0);
-  });
-
-  it('assesses AppContainer only on Windows and remains truthful about its compatibility surface', async () => {
-    const windowsContext: PathContext = {
-      home: AbsolutePath.of('C:\\Users\\person'),
-      workspace: AbsolutePath.of('C:\\work'),
-      platform: 'win32',
-    };
-    const windowsPolicy = new SandboxPolicy({
-      workspace: windowsContext.workspace,
-      reads: [ResourceRef.subtree(windowsContext.workspace)],
-      writes: [ResourceRef.subtree(windowsContext.workspace)],
-      denies: [],
-      overrides: [],
-      network: [],
-    });
-
-    const status = await new AssessProtection(new FixedProbe()).execute({
-      platform: 'win32',
-      runner: appContainer,
-      policy: windowsPolicy,
-      context: windowsContext,
-    });
-
-    expect(status.level).toBe('DEGRADED');
-    expect(status.capabilities).toEqual({
-      mechanism: 'appcontainer',
-      denyCanary: 'passed',
-      filesystem: 'partial',
-      processTree: 'enforced',
-      network: 'denied',
-    });
-    expect(status.reasons.map((entry) => entry.code)).toContain(
-      'appcontainer.compatibility-surface',
-    );
-  });
-
-  it('never credits AppContainer when its real deny canary fails', async () => {
-    const windowsContext: PathContext = {
-      home: AbsolutePath.of('C:\\Users\\person'),
-      workspace: AbsolutePath.of('C:\\work'),
-      platform: 'win32',
-    };
-    const windowsPolicy = new SandboxPolicy({
-      workspace: windowsContext.workspace,
-      reads: [ResourceRef.subtree(windowsContext.workspace)],
-      writes: [ResourceRef.subtree(windowsContext.workspace)],
-      denies: [],
-      overrides: [],
-      network: [],
-    });
-    const probe = new FixedProbe({
-      passed: false,
-      code: 'deny-canary-readable',
-      checks: {
-        runnerStarted: true,
-        workspaceReadAllowed: true,
-        outsideReadDenied: false,
-        childOutsideReadDenied: false,
-      },
-      exitCode: 42,
-      signal: null,
-    });
-
-    const status = await new AssessProtection(probe).execute({
-      platform: 'win32',
-      runner: appContainer,
-      policy: windowsPolicy,
-      context: windowsContext,
-    });
-
-    expect(status.level).toBe('UNPROTECTED');
-    expect(status.capabilities.denyCanary).toBe('failed');
   });
 
   it('marks another platform UNPROTECTED when runner selection produced no backend', async () => {

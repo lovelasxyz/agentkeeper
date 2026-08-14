@@ -2,11 +2,18 @@ import type { BaselineChange } from '../../domain/entities/BaselineChange.js';
 import type { ScanReport } from '../../domain/entities/ScanReport.js';
 import type { PathContext } from '../../domain/paths/PathContext.js';
 import type { RuleSwitches } from '../../domain/rules/RuleRegistry.js';
+import type { AbsolutePath } from '../../domain/value-objects/AbsolutePath.js';
 import type { SeverityName } from '../../domain/value-objects/Severity.js';
 import type { BaselineEntry } from './index.js';
 
 export interface BaselineSnapshotter {
   collect(context: PathContext): Promise<readonly BaselineEntry[]>;
+}
+
+/** One anchor the resident watcher must observe, and whether to descend. */
+export interface WatchTarget {
+  readonly path: AbsolutePath;
+  readonly recursive: boolean;
 }
 
 export interface PersistenceScanner {

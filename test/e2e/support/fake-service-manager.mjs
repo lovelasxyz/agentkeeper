@@ -86,8 +86,13 @@ function launchd(args) {
 
 function systemd(args) {
   const state = readState();
-  const id = args.at(-1);
-  const verb = args.filter((arg) => arg !== '--user' && arg !== '--now' && arg !== id)[0];
+  // `systemctl --user daemon-reload` carries no unit at all, so the unit is
+  // not simply "the last argument": that reading swallows the verb itself and
+  // leaves the fake refusing the very first call the controller makes.
+  const positional = args.filter((arg) => arg !== '--user' && arg !== '--now');
+  const verb = positional[0];
+  const id = positional.length > 1 ? positional.at(-1) : undefined;
+  if (verb === 'daemon-reload') process.exit(0);
   if (verb === 'is-enabled') {
     if (state[id] === undefined) {
       process.stderr.write('Failed to get unit file state\n');
@@ -101,7 +106,6 @@ function systemd(args) {
     process.stdout.write(`${running ? 'active' : 'inactive'}\n`);
     process.exit(running ? 0 : 3);
   }
-  if (verb === 'daemon-reload') process.exit(0);
   if (verb === 'enable') state[id] = { registered: true, running: true };
   else if (verb === 'disable') delete state[id];
   else if (verb === 'stop') {

@@ -8,9 +8,9 @@ after the 1.0.4 hardening cycle.
 
 | Platform | State | What that means |
 |---|---|---|
-| macOS | **Production-ready, with named gaps** | The boundary holds against the adversarial suite run against the published package. Tier 2 is denied and proven denied. Gaps are reported on every run and carry stable reason codes. |
+| macOS | **Production-ready, with named gaps** | The boundary holds against the adversarial suite run against the published package. Tier 2 is denied and proven denied — now including `/var/root`, the local account database, `sudoers` and the system launchd directories, with the machine keychain probed live through its firmlink. Gaps are reported on every run and carry stable reason codes. |
 | Linux | **Credible, under-verified** | The design is stronger than macOS — empty home, explicit mounts, no route to the host. But it has only ever been exercised in CI, never driven by hand on a real desktop under a real agent. |
-| Windows | **Unprotected, honestly** | No sandbox backend ships. The AppContainer child never exited and its canary never passed; without a Windows machine with a debugger the cause could not be found, and a boundary nobody has observed holding is not shipped. The package gate refuses any native helper. The detection layer — hook rules, the git chain, the watcher — works there. |
+| Windows | **Unprotected, honestly; under active observation** | No helper ships: the AppContainer child never exited and its canary never passed, so the package gate refuses `dist/native/` and the platform reports `UNPROTECTED`. The backend lives in the tree, compiles on every CI run, and its instrumented canary reports the furthest stage reached on real Windows hardware every push — the failure is observed, not theorised. |
 
 What changed since 1.0.4, in one paragraph: an upgrade now reaches the watcher
 on its own (`activate`/`repair` restart a stale daemon, and the daemon reads
@@ -65,10 +65,10 @@ gated by the same canary the other two platforms pass.
 
 | # | Item | State | Honest weight |
 |---|---|---|---|
-| 1 | AppContainer child never exits | **Blocked on hardware** | Windows keeps reporting `UNPROTECTED` until a backend passes its own canary on real Windows 10/11, x64 and arm64, with a debugger attached. No further guess ships. |
+| 1 | AppContainer child never exits | **Blocked, but observed** | The backend is in-tree and compiled per push; the instrumented canary reports its furthest stage on the GitHub-hosted runner, so the failure point comes from hardware, not from reasoning. No helper ships until the suite passes on Windows 10/11 x64 and arm64 and becomes a gate. |
 | 2 | Linux never driven by hand | **Open** | Everything known about the Linux backend comes from CI. Before claiming production readiness there it needs the adversarial session macOS got, on a real desktop, with a real agent. |
 | 3 | `/private/var/at/tabs` unwatched without Full Disk Access | **Named, and shown** | A platform limit, not a defect: the directory is root-only. Reported as `daemon.watch.degraded` by the daemon and *quoted by `doctor`* from the watcher's self-report, so the gap is visible without reading the audit log. |
-| 4 | Narrowing `seatbelt.broad-system-read` | **Deliberate, shrunk** | The machine keychain, SSH host keys, `/var/root` and the local account database are explicit tier 2 denies — the two system stores probed live in the isolation suite, directly and through the firmlink. What remains readable is system-owned and world-readable; the enumerated allowlist is a dead end (it crashes the runtime before `main()`). |
+| 4 | Narrowing `seatbelt.broad-system-read` | **Deliberate, shrunk again** | The machine keychain, SSH host keys, `/var/root`, the local account database, `sudoers` and the system launchd directories are explicit tier 2 denies. What remains readable is system-owned and world-readable; the enumerated allowlist is a dead end (it crashes the runtime before `main()`). |
 
 Everything from the 1.0.4 list that code could close, code closed: the stale
 watcher restarts itself into the installed version, the lifecycle e2e is
@@ -136,17 +136,11 @@ breaking; the second is what makes it trustworthy when it does.
 
 ## Repository readiness, and the part that is not code
 
-Done locally: `CODE_OF_CONDUCT.md` exists; the open items above are the issue
-list. Still outstanding on the GitHub side (needs a maintainer with `gh` or the
-web UI, none of it is a code change):
-
-- Description and topics (`sandbox`, `ai-agent`, `prompt-injection`,
-  `seatbelt`, `bubblewrap`): a security tool nobody can find is a tool nobody
-  adopts.
-- Releases published from the existing tags, with notes — the tags carry
-  provenance; the notes are what people read.
-- Branch protection on `main`.
-- The open items 1 and 2 above filed as issues, so they stop being silent.
+Done: `CODE_OF_CONDUCT.md` exists; the repository carries a description,
+topics, a homepage; all six tags are published as Releases with their
+CHANGELOG notes; `main` is protected (no force-pushes, no deletions, the
+three `verify` jobs and `package contents` are required checks); the two open
+items above are filed as issues so they stop being silent.
 
 ## When to re-read this
 

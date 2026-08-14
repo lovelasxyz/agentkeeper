@@ -73,40 +73,42 @@ describe('build and CI portability', () => {
     );
   });
 
-  it('keeps Windows CI to the portable verification surface: build and tests, no backend', () => {
-    // The AppContainer backend is not shipped (production-readiness P0.1), so
-    // there is nothing to compile and nothing to run a sandbox suite against.
-    // Windows CI still earns its place: typecheck, architecture, the unit and
-    // integration suites, and a clean build — the cross-platform parts.
+  it('builds the Windows helper in CI, runs the suite advisory, and still ships nothing native', () => {
+    // The AppContainer backend is not shipped (its canary never passed), but
+    // the helper is compiled and the suite is exercised on every push so the
+    // failure — with the instrumented canary's last stage — is *observed* on
+    // real Windows hardware rather than reasoned about.
     const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8');
 
     expect(workflow).toMatch(/windows-latest/);
-    expect(workflow).toMatch(/npm run clean/);
-    expect(workflow).toMatch(/npm run build/);
-    expect(workflow).not.toMatch(/msvc-dev-cmd/);
+    expect(workflow).toMatch(/msvc-dev-cmd/);
+    expect(workflow).toMatch(/npm run build:windows-sandbox/);
 
-    // No step anywhere may be advisory: a continue-on-error is a gate that
-    // does not gate, and on a security product that is how a platform ships
-    // broken while looking green.
+    // Exactly one advisory step in either workflow: the Windows sandbox
+    // suite, and only until its deny canary passes. A relaxation anywhere
+    // else would quietly stop gating a release.
     for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
       const text = readFileSync(join(repository, relative), 'utf8');
-      expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(0);
+      expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(
+        relative.includes('ci.yml') ? 1 : 0,
+      );
     }
+    expect(workflow).toMatch(
+      /Sandbox isolation tests \(Windows[^\r\n]*\s+if: runner\.os == 'Windows'\s+continue-on-error: true/,
+    );
   });
 
   it('refuses to package a native Windows backend', () => {
     // Shipping the helper while its canary never completes would let the
     // platform claim a boundary it cannot prove. The package gate rejects any
-    // native artifact, and no workflow assembles one anymore.
+    // native artifact, and the publish workflow never assembles one.
     const verifier = readFileSync(join(repository, 'scripts/verify-package.mjs'), 'utf8');
     expect(verifier).toMatch(/dist\/native/);
 
-    for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
-      const workflow = readFileSync(join(repository, relative), 'utf8');
-      expect(workflow, relative).not.toMatch(/agentkeeper-sandbox\.exe/);
-      expect(workflow, relative).not.toMatch(/win32-arm64/);
-      expect(workflow, relative).not.toMatch(/msvc-dev-cmd/);
-    }
+    const publish = readFileSync(join(repository, '.github/workflows/publish.yml'), 'utf8');
+    expect(publish).not.toMatch(/agentkeeper-sandbox\.exe/);
+    expect(publish).not.toMatch(/win32-arm64/);
+    expect(publish).not.toMatch(/msvc-dev-cmd/);
     // Packing must not re-run prepack: a rebuild after verification would
     // decide the tarball contents from a different tree than the one verified.
     // The verifier owns that flag now, so assert it where it actually lives.

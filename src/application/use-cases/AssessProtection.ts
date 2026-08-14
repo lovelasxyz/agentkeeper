@@ -103,7 +103,7 @@ export class AssessProtection {
           processTree: 'none',
           network: 'none',
         },
-        reasons: [probeFailureReason(probe.code)],
+        reasons: [probeFailureReason(probe)],
       });
     }
 
@@ -134,6 +134,15 @@ export class AssessProtection {
           'The current Seatbelt profile permits broad reads outside user home directories.',
         ),
       );
+    } else if (mechanism === 'appcontainer') {
+      filesystem = 'partial';
+      reasons.push(
+        reason(
+          'appcontainer.compatibility-surface',
+          'filesystem',
+          'Stable AppContainer confines user resources but retains a documented common-system compatibility surface.',
+        ),
+      );
     }
 
     // One network rule for every backend: egress exists only through a broker
@@ -141,7 +150,15 @@ export class AssessProtection {
     // denied, because every backend fails a protected run closed instead.
     let network: NetworkProtection = 'denied';
     if (egressRequested) {
-      if (broker.verified) {
+      if (mechanism === 'appcontainer') {
+        reasons.push(
+          reason(
+            'network.appcontainer-deny-only',
+            'network',
+            'AppContainer starts with zero network capabilities; requested egress stays denied until a destination broker is available.',
+          ),
+        );
+      } else if (broker.verified) {
         network = 'brokered';
       } else {
         reasons.push(broker.reason ?? BROKER_REQUIRED);
@@ -229,11 +246,13 @@ function mechanismMatchesPlatform(
 ): boolean {
   return (
     (mechanism === 'seatbelt' && platform === 'darwin') ||
-    (mechanism === 'bubblewrap' && platform === 'linux')
+    (mechanism === 'bubblewrap' && platform === 'linux') ||
+    (mechanism === 'appcontainer' && platform === 'win32')
   );
 }
 
-function probeFailureReason(code: SandboxProbeCode): ProtectionReason {
+function probeFailureReason(probe: { code: SandboxProbeCode; detail?: string }): ProtectionReason {
+  const code = probe.code;
   const messages: Readonly<Record<Exclude<SandboxProbeCode, 'passed'>, string>> = {
     'deny-canary-readable': 'The sandboxed process could read the outside deny canary.',
     'child-deny-canary-readable': 'A sandboxed child process could read the outside deny canary.',
@@ -251,7 +270,8 @@ function probeFailureReason(code: SandboxProbeCode): ProtectionReason {
       'The sandbox probe reported failure with a passing result code.',
     );
   }
-  return reason(`sandbox.${code}`, 'sandbox', messages[code]);
+  const suffix = probe.detail === undefined ? '' : ` (${probe.detail})`;
+  return reason(`sandbox.${code}`, 'sandbox', `${messages[code]}${suffix}`);
 }
 
 function unprotected(code: string, area: ProtectionReason['area'], message: string): ProtectionStatus {

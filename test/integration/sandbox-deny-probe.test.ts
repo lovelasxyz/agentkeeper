@@ -120,6 +120,7 @@ describe('NodeSandboxProbe', () => {
     expect(result).toEqual({
       passed: false,
       code: 'runner-failed',
+      detail: 'sandbox process could not start',
       checks: {
         runnerStarted: false,
         workspaceReadAllowed: false,
@@ -205,5 +206,33 @@ describe('NodeSandboxProbe', () => {
     } finally {
       if (originalPath !== undefined) process.env['PATH'] = originalPath;
     }
+  });
+});
+
+describe('canary stage observability', () => {
+  it('maps a helper-side child timeout to canary-timed-out and quotes the last stage', async () => {
+    class TimingOutRunner extends NoopRunner {
+      override async run(
+        _policy: SandboxPolicy,
+        context: PathContext,
+        _command: SandboxCommand,
+      ): Promise<SandboxRunResult> {
+        // The child hung after touching the filesystem: the stage file is the
+        // only witness, and the report must carry it.
+        const { writeFile } = await import('node:fs/promises');
+        await writeFile(context.workspace.join('.canary-stage').value, 'deny-checked');
+        throw new Error(
+          'The confined child did not exit within the probe deadline (windows.child-timed-out)',
+        );
+      }
+    }
+
+    const result = await new NodeSandboxProbe().probe({
+      runner: new TimingOutRunner(),
+      platform: hostPlatform(),
+    });
+
+    expect(result.code).toBe('canary-timed-out');
+    expect(result.detail).toContain('last canary stage: deny-checked');
   });
 });

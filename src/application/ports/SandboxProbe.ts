@@ -25,6 +25,12 @@ export interface SandboxProbeResult {
   readonly checks: SandboxProbeChecks;
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
+  /**
+   * The furthest canary stage observed on failure, when known. A timeout with
+   * no stage means the child never initialized; one after `child-returned`
+   * means the boundary itself is fine and the bug is in the launcher's wait.
+   */
+  readonly detail?: string;
 }
 
 export interface SandboxProbeRequest {

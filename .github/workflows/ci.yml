@@ -28,6 +28,13 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # The Windows helper is built on every run so the sandbox suite below
+      # exercises the real boundary on real hardware. It is *not* shipped:
+      # verify-package refuses dist/native until the suite gates.
+      - name: Configure the MSVC toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       # Layer 1 on Linux needs bubblewrap. Without it the sandbox suite would
       # skip silently, which is exactly the kind of quiet gap this project is
       # about.
@@ -58,16 +65,38 @@ jobs:
       - run: npm run clean
       - run: npm run build
 
+      # After `clean` and `build`, so the helper survives into test:sandbox.
+      - name: Build the Windows AppContainer helper (x64, not shipped)
+        if: runner.os == 'Windows'
+        run: npm run build:windows-sandbox
+
       # The tests that decide whether the product works: a real process under
       # the real mechanism, checking that forbidden things actually fail.
-      # macOS and Linux are the declared full-support platforms. Windows runs
-      # everything portable; its sandbox suite is gone with the AppContainer
-      # backend, which is not shipped while its deny canary has never passed
-      # (production-readiness P0.1) — the platform reports UNPROTECTED honestly
-      # instead of gating a release on a boundary nobody has observed working.
+      # macOS and Linux are the declared full-support platforms.
       - name: Sandbox isolation tests
         if: runner.os != 'Windows'
         run: npm run test:sandbox
+
+      # Windows AppContainer has never passed its deny canary. The suite runs
+      # advisory so the failure — with the instrumented canary's last stage —
+      # is observed on every push, and becomes a gate the day it passes.
+      # The helper is never shipped meanwhile: verify-package refuses it.
+      - name: Sandbox isolation tests (Windows, not yet a release gate)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $output = npm run test:sandbox 2>&1 | Out-String
+          Write-Output $output
+          $tail = ($output -split "`n" | Select-Object -Last 40) -join "`n"
+          @(
+            '### Windows sandbox suite — reported, not gating',
+            '',
+            '```',
+            $tail.TrimEnd(),
+            '```'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: End-to-end install lifecycle
         if: runner.os != 'Windows'
@@ -85,9 +114,22 @@ jobs:
       - name: Self-scan
         run: node dist/cli.js scan .
 
+  windows-native-arm64:
+    name: Windows native helper (ARM64 compile, not shipped)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+      - run: node scripts/build-windows-sandbox.mjs arm64
+
   package:
     name: package contents
-    needs: [verify]
+    needs: [verify, windows-native-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

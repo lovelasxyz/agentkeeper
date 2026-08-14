@@ -77,12 +77,15 @@ The sandbox decision is separate from the rest of the product: the file-watch
 detection layer, the PreToolUse hook rules and the Git hook chain all work on
 Windows without layer 1.
 
-**How Windows comes back.** One condition: an AppContainer backend whose deny
-canary passes in a process and its child, demonstrated on real Windows 10 and
-11 hardware, x64 and arm64. Until the suite passes locally — not in CI
-emulation guesses, on hardware with a debugger attached — no helper ships.
-The day it passes, the backend returns as a release-gating suite like macOS
-and Linux, with the loopback exemption noted below to retire denial-only
+**How Windows comes back.** The backend lives in the tree again, is compiled
+on every CI run, and its sandbox suite runs on the GitHub-hosted Windows
+runner — real hardware — in advisory mode. The canary is instrumented: it
+writes the furthest stage it reached (`boot` → `allowed-read` →
+`deny-checked` → `child-boot` → `child-returned`) into the workspace, so a
+hang is *observed* in CI logs rather than guessed at. The helper is still not
+shipped: the package gate refuses `dist/native/` until the suite passes on
+Windows 10 and 11, x64 and arm64, and only then becomes a release gate like
+the other two. With the loopback exemption noted below to retire denial-only
 egress: `CheckNetIsolation LoopbackExempt` scoped to the container SID,
 granted with elevation during `activate`.
 

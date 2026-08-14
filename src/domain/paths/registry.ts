@@ -143,6 +143,20 @@ export const SENSITIVE_PATHS: readonly SensitivePath[] = Object.freeze([
   }),
 
   SensitivePath.credential({
+    id: 'macos-sudoers',
+    pattern: '/private/etc/sudoers',
+    platforms: MAC,
+    rationale: 'Privilege escalation rules; read access reveals who may sudo and how to bypass.',
+  }),
+
+  SensitivePath.credential({
+    id: 'macos-sudoers-d',
+    pattern: '/private/etc/sudoers.d/**',
+    platforms: MAC,
+    rationale: 'Drop-in privilege rules; the same sensitivity as the main sudoers file.',
+  }),
+
+  SensitivePath.credential({
     id: 'gnupg',
     pattern: '~/.gnupg/**',
     platforms: POSIX,
@@ -335,6 +349,26 @@ export const SENSITIVE_PATHS: readonly SensitivePath[] = Object.freeze([
     platforms: MAC,
     rationale:
       'A plist here runs at every login without any further user action.',
+  }),
+
+  SensitivePath.persistence({
+    id: 'system-launchd',
+    pattern: '/Library/LaunchAgents/**',
+    readTier: 2,
+    onRead: 'block',
+    platforms: MAC,
+    rationale:
+      'System-wide agents run for every user; their arguments can embed credentials.',
+  }),
+
+  SensitivePath.persistence({
+    id: 'system-launch-daemons',
+    pattern: '/Library/LaunchDaemons/**',
+    readTier: 2,
+    onRead: 'block',
+    platforms: MAC,
+    rationale:
+      'Root daemons are the strongest macOS persistence; their plists can embed secrets.',
   }),
 
   SensitivePath.persistence({

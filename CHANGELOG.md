@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.1.0
+
+### Fixed
+
+- **The instrumented canary broke the platform it was not investigating.** The
+  child half of the deny canary had its stage-file path concatenated into the
+  child's source at run time, unquoted: node parsed `/Users/.../.canary-stage`
+  as a regular expression, the child died of `SyntaxError: Invalid regular
+  expression flags`, and the probe read that as a boundary failure. macOS
+  reported `UNPROTECTED` with `sandbox.child-probe-failed` while its sandbox
+  was in fact intact. The child's source is now assembled once, with the path
+  embedded as a string literal. Caught before release by running the suite on
+  real hardware — and the product's refusal to report a protection it had not
+  proven is what made it visible at all.
+
+### Changed
+
+- **The Windows backend is back in the tree — instrumented, and still not
+  shipped.** The AppContainer helper is compiled on every CI run and its
+  sandbox suite runs advisory on the GitHub-hosted Windows runner, so the
+  child-hang failure is now *observed*, not theorised: the canary writes the
+  furthest stage it reached (`boot` → `allowed-read` → `deny-checked` →
+  `child-boot` → `child-returned`) and the probe, `doctor` and the CI summary
+  all quote it. The package gate still refuses `dist/native/` — the helper
+  ships only when the suite passes on real Windows hardware, and then as a
+  release gate like macOS and Linux.
+- **The macOS profile denies the remaining system credential stores.**
+  `/var/root`, the local account database (`/private/var/db/dslocal`),
+  `sudoers` and the system-wide launchd directories joined the machine
+  keychain and the SSH host keys as tier 2 denies, further shrinking
+  `seatbelt.broad-system-read`.
+
 ## 2.0.0
 
 ### Removed

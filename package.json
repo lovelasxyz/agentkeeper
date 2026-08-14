@@ -1,6 +1,6 @@
 {
   "name": "agentkeeper",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Confine AI coding agents to what they need: OS-level sandboxing plus a thin detection layer. No Docker, no daemon in the cloud, no telemetry.",
   "keywords": [
     "ai-agent",
@@ -48,6 +48,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
+    "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit --project integration",

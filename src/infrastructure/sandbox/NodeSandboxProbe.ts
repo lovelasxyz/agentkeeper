@@ -18,6 +18,9 @@ const EXIT_DENY_CANARY_READABLE = 42;
 const EXIT_CHILD_DENY_CANARY_READABLE = 43;
 const EXIT_CHILD_PROBE_FAILED = 44;
 
+/** Last stage the confined canary reached; written into the writable workspace. */
+const CANARY_STAGE_FILE = '.canary-stage';
+
 /**
  * Black-box boundary probe. It creates a disposable home, confirms the
  * workspace is usable, then attempts the same forbidden read both directly
@@ -55,6 +58,7 @@ export class NodeSandboxProbe implements SandboxProbe {
     await writeFile(deniedCanary.value, 'denied', { mode: 0o600 });
 
     const context: PathContext = { home, workspace, platform: request.platform };
+    const stagePath = workspace.join(CANARY_STAGE_FILE).value;
     const runtimeRoot = AbsolutePath.of(process.execPath).parent.parent;
     const policy = new SandboxPolicy({
       workspace,
@@ -72,7 +76,7 @@ export class NodeSandboxProbe implements SandboxProbe {
         signal: abandon.signal,
         deadlineMs: CANARY_TIMEOUT_MS,
         executable: process.execPath,
-        args: ['-e', canaryScript(allowedCanary.value, deniedCanary.value)],
+        args: ['-e', canaryScript(allowedCanary.value, deniedCanary.value, stagePath)],
         cwd: workspace,
         env: {
           HOME: home.value,
@@ -86,20 +90,45 @@ export class NodeSandboxProbe implements SandboxProbe {
         abandon.abort();
       });
       return interpret(result);
-    } catch {
+    } catch (error) {
       // A canary that never returns is not a boundary that works: `doctor`
-      // must say the protection is unverified instead of hanging forever.
+      // must say the protection is unverified instead of hanging forever. The
+      // stage file says how far it got — observed, not assumed.
+      const stage = await readCanaryStage(stagePath);
+      const runnerTimedOut =
+        error instanceof Error && error.message.includes('windows.child-timed-out');
+      const detail = [
+        timedOut ? 'canary timed out' : errorMessage(error),
+        stage === null ? null : `last canary stage: ${stage}`,
+      ]
+        .filter((part): part is string => part !== null)
+        .join('; ');
       return failure(
-        timedOut ? 'canary-timed-out' : 'runner-failed',
+        timedOut || runnerTimedOut ? 'canary-timed-out' : 'runner-failed',
         false,
         false,
         false,
         false,
         null,
         null,
+        detail,
       );
     }
   }
+}
+
+async function readCanaryStage(stagePath: string): Promise<string | null> {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const stage = (await readFile(stagePath, 'utf8')).trim();
+    return stage.length === 0 ? null : stage;
+  } catch {
+    return null;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** A canary is a few milliseconds of work; anything near this is stuck. */
@@ -129,16 +158,43 @@ function withDeadline<T>(
   });
 }
 
-function canaryScript(allowedPath: string, deniedPath: string): string {
+/**
+ * The child half of the canary: record that it booted, then attempt the same
+ * forbidden read. Exit 42 means it succeeded, which is the failure this whole
+ * probe exists to catch.
+ */
+function childCanarySource(stagePath: string): string {
+  return [
+    "const fs = require('node:fs');",
+    `try { fs.writeFileSync(${JSON.stringify(stagePath)}, 'child-boot'); } catch {}`,
+    `try { fs.readFileSync(process.argv[1]); process.exit(${EXIT_DENY_CANARY_READABLE}); }`,
+    'catch { process.exit(0); }',
+  ].join('');
+}
+
+function canaryScript(allowedPath: string, deniedPath: string, stagePath: string): string {
+  // The stage file is the observability contract: a canary that hangs (the
+  // Windows AppContainer child did) must say *where* it hung, so CI logs show
+  // the furthest stage reached instead of a bare timeout. Writes go into the
+  // policy-writable workspace, which every backend grants the canary.
+  const stage = JSON.stringify(stagePath);
   return [
     "const fs = require('node:fs');",
     "const cp = require('node:child_process');",
+    `const stage = (s) => { try { fs.writeFileSync(${stage}, s); } catch {} };`,
+    "stage('boot');",
     `const allowed = ${JSON.stringify(allowedPath)};`,
     `const denied = ${JSON.stringify(deniedPath)};`,
-    `try { fs.readFileSync(allowed); } catch { process.exit(${EXIT_WORKSPACE_UNREADABLE}); }`,
-    `try { fs.readFileSync(denied); process.exit(${EXIT_DENY_CANARY_READABLE}); } catch {}`,
-    "const childScript = \"const fs=require('node:fs');try{fs.readFileSync(process.argv[1]);process.exit(42)}catch{process.exit(0)}\";",
+    `try { fs.readFileSync(allowed); stage('allowed-read'); } catch { process.exit(${EXIT_WORKSPACE_UNREADABLE}); }`,
+    `try { fs.readFileSync(denied); process.exit(${EXIT_DENY_CANARY_READABLE}); } catch { stage('deny-checked'); }`,
+    // Built here rather than concatenated inside the canary: assembling the
+    // child's source at run time once embedded the path unquoted, node parsed
+    // it as a regular expression, and the child died of a syntax error. The
+    // probe read that as a broken boundary and reported UNPROTECTED on a
+    // platform whose boundary was fine.
+    `const childScript = ${JSON.stringify(childCanarySource(stagePath))};`,
     "const child = cp.spawnSync(process.execPath, ['-e', childScript, denied], { stdio: 'ignore' });",
+    "stage('child-returned');",
     `if (child.status === ${EXIT_DENY_CANARY_READABLE}) process.exit(${EXIT_CHILD_DENY_CANARY_READABLE});`,
     `if (child.status !== 0) process.exit(${EXIT_CHILD_PROBE_FAILED});`,
     'process.exit(0);',
@@ -192,6 +248,7 @@ function failure(
   childOutsideReadDenied: boolean,
   exitCode: number | null,
   signal: NodeJS.Signals | null,
+  detail?: string,
 ): SandboxProbeResult {
   return {
     passed: false,
@@ -204,5 +261,6 @@ function failure(
     },
     exitCode,
     signal,
+    ...(detail === undefined ? {} : { detail }),
   };
 }

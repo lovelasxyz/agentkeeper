@@ -1,6 +1,6 @@
 export type ProtectionLevel = 'PROTECTED' | 'DEGRADED' | 'UNPROTECTED' | 'BYPASSED';
 
-export type ProtectionMechanism = 'seatbelt' | 'bubblewrap' | 'none';
+export type ProtectionMechanism = 'seatbelt' | 'bubblewrap' | 'appcontainer' | 'none';
 export type DenyCanaryState = 'passed' | 'failed' | 'not-run';
 export type EnforcementState = 'enforced' | 'partial' | 'unverified' | 'none';
 export type NetworkProtection =

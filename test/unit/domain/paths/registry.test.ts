@@ -131,6 +131,10 @@ describe('sensitive path registry (spec §6.4)', () => {
       // profile as well so an elevated agent still does not reach them.
       ['/var/root/Library/Keychains/login.keychain-db', 'credential', 'darwin'],
       ['/private/var/db/dslocal/nodes/Default/smb.plist', 'credential', 'darwin'],
+      ['/private/etc/sudoers', 'credential', 'darwin'],
+      ['/private/etc/sudoers.d/admin', 'credential', 'darwin'],
+      ['/Library/LaunchAgents/com.evil.agent.plist', 'persistence', 'darwin'],
+      ['/Library/LaunchDaemons/com.evil.daemon.plist', 'persistence', 'darwin'],
       // Linux-only surfaces have no macOS counterpart and must not be asserted there.
       ['~/.config/systemd/user/evil.service', 'persistence', 'linux'],
       ['~/.config/google-chrome/Default/Cookies', 'credential', 'linux'],

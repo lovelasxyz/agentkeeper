@@ -548,7 +548,11 @@ describe('stale watcher restart (an upgrade must be sufficient on its own)', () 
  * nothing, and turning that into a failed commit takes the developer's git
  * down with a broken install — which is how people end up deleting the guard.
  */
-describe('the pre-commit hook survives a broken install', () => {
+// The hook body is POSIX sh; Windows has no interpreter for it, and the
+// managed hooks there are a different shape entirely.
+const describeOnPosix = process.platform === 'win32' ? describe.skip : describe;
+
+describeOnPosix('the pre-commit hook survives a broken install', () => {
   const roots: string[] = [];
 
   afterAll(() => {

@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 2.0.0
+
+### Removed
+
+- **The Windows sandbox backend.** Its deny canary never returned: the
+  AppContainer child started and did not exit, and the cause was not found
+  without a Windows machine and a debugger. A boundary nobody has observed
+  holding is not a boundary, so it is withdrawn rather than shipped unproven.
+  Windows now reports `UNPROTECTED` with its own reason code, protected runs
+  fail closed instead of hanging, and the package no longer carries a native
+  helper for it. The detection layer — hook rules, the git chain, the resident
+  watcher — continues to work there.
+
+  This is why the major version moves. Nothing that worked was taken away, but
+  a platform's status changed and the package contents changed with it, and
+  that is not something a security tool should hide in a minor bump.
 
 ### Fixed
 

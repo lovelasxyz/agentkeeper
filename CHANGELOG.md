@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.1
+
+### Fixed
+
+- **A broken install no longer takes `git commit` with it.** The managed hooks
+  invoked the CLI unconditionally, so when the package went missing from
+  `node_modules` every commit in every repository failed with
+  `MODULE_NOT_FOUND`. The hooks now distinguish the two cases that were
+  conflated: a scan that *reports a finding* still blocks the commit, which is
+  the whole point of a pre-commit gate, while a scan that *could not run* is
+  skipped with an explanation on stderr. A damaged installation is `doctor`'s
+  to report, not `git commit`'s to enforce — a guard that breaks the workflow
+  it guards is a guard people delete.
+
 ## 2.1.0
 
 ### Fixed

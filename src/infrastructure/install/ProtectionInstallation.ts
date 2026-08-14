@@ -588,6 +588,16 @@ function renderGitHook(
     '  _agentkeeper_chain_status=$?',
     '  [ "$_agentkeeper_chain_status" -eq 0 ] || exit "$_agentkeeper_chain_status"',
     'fi',
+    // A scan that reports a finding must stop the commit. A scan that could
+    // not run reports nothing, and failing the commit on that takes the
+    // developer's git down with a broken install — which is how a guard ends
+    // up being deleted. The two cases are distinguished here; the damaged
+    // installation is `doctor`'s to report, not `git commit`'s to enforce.
+    `if [ ! -f ${posixQuote(entrypoint.value)} ] || [ ! -x ${posixQuote(runtime.value)} ]; then`,
+    `  echo "agentkeeper: ${name} scan skipped, the installation is incomplete." >&2`,
+    '  echo "agentkeeper: run \'agentkeeper repair\' or reinstall the package." >&2',
+    '  exit 0',
+    'fi',
     name === 'pre-commit' ? `exec ${scan}` : `${scan} || true`,
     '',
   ].join('\n');

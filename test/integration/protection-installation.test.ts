@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import { AbsolutePath } from '../../src/domain/value-objects/AbsolutePath.js';
 import type {
   GitConfigurationController,
@@ -537,3 +541,69 @@ describe('stale watcher restart (an upgrade must be sufficient on its own)', () 
     expect(plan.externalChanges.some((change) => change.kind === 'service' && change.restart === true)).toBe(true);
   });
 });
+
+/**
+ * The pre-commit hook is a blocking gate on purpose: a scan that reports a
+ * finding must stop the commit. But a scan that could not run at all reports
+ * nothing, and turning that into a failed commit takes the developer's git
+ * down with a broken install — which is how people end up deleting the guard.
+ */
+describe('the pre-commit hook survives a broken install', () => {
+  const roots: string[] = [];
+
+  afterAll(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** The real generated body, for an entrypoint that may or may not exist. */
+  async function preCommitBody(entrypoint: string): Promise<string> {
+    const planner = new ProtectionInstallationPlanner(
+      new InMemoryFileSystem(),
+      {
+        ...baseOptions(),
+        // A real interpreter: this exercises the hook's own behaviour, not the
+        // fixture's placeholder path.
+        runtimeExecutable: AbsolutePath.of(process.execPath),
+        agentkeeperEntrypoint: AbsolutePath.of(entrypoint),
+      },
+      'darwin',
+      new FakeServiceController(),
+      new FakeGitConfiguration(null),
+    );
+    const plan = await planner.plan('activate');
+    const body = plan.filePlan.changes.find(
+      (change) => change.path.value === `${MANAGED_HOOKS.value}/pre-commit`,
+    )?.after;
+    if (body === null || body === undefined) throw new Error('no pre-commit hook was planned');
+    return body;
+  }
+
+  it('skips the scan and lets the commit through when the CLI is gone', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentkeeper-hook-'));
+    roots.push(root);
+    const hook = join(root, 'pre-commit');
+    writeFileSync(hook, await preCommitBody(join(root, 'absent', 'cli.js')));
+    chmodSync(hook, 0o755);
+
+    const result = runHook(hook);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toMatch(/agentkeeper/i);
+  });
+
+  it('still blocks the commit when the scan itself refuses', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentkeeper-hook-'));
+    roots.push(root);
+    const refusing = join(root, 'refusing-cli.js');
+    writeFileSync(refusing, 'process.exit(2);\n');
+    const hook = join(root, 'pre-commit');
+    writeFileSync(hook, await preCommitBody(refusing));
+    chmodSync(hook, 0o755);
+
+    expect(runHook(hook).status).toBe(2);
+  });
+});
+
+function runHook(hook: string): { status: number; stderr: string } {
+  const run = spawnSync('/bin/sh', [hook], { encoding: 'utf8' });
+  return { status: run.status ?? 1, stderr: run.stderr ?? '' };
+}

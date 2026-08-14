@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.1.2
+
+### Fixed
+
+- **An upgrade could leave `repair` refusing to repair.** Every release that
+  edits a hook or shim body changes the manifest's configuration checksum, and
+  three separate checks treated that expected drift as tampering — so after
+  installing 2.1.1 both `activate` and `repair` refused with
+  `configuration-mismatch`, and the only way forward was `deactivate` followed
+  by `activate`: the same end state, reached through a window with no
+  protection at all. The refusal made the safe path harder than the unsafe one
+  while preventing nothing. `repair` now reconciles a changed configuration, a
+  regenerated artifact and an artifact a release introduced, which is precisely
+  what repair is for. `activate` stays strict and its message now names the way
+  out. The trusted runtime and entrypoint pair remains untouchable by repair:
+  which binary is trusted is not something reconciliation may redefine.
+
 ## 2.1.1
 
 ### Fixed

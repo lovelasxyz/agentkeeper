@@ -549,11 +549,20 @@ export class ManagedInstallationPlanner {
     ) {
       return 'Manifest command pair does not match the trusted runtime and CLI entrypoint';
     }
+    // `repair` is excluded on purpose: reconciling managed state with the
+    // installed configuration is precisely its job, and every release that
+    // changes a hook or shim body changes this checksum. Refusing here left
+    // `deactivate` + `activate` as the only way forward — the same end state
+    // reached through a window with no protection at all, so the refusal made
+    // the safe path harder than the unsafe one while preventing nothing. The
+    // command pair above stays strict: which binary is trusted is not
+    // something repair may quietly redefine.
     if (
       operation !== 'deactivate' &&
+      operation !== 'repair' &&
       payload.configurationChecksum !== this.configurationChecksum()
     ) {
-      return 'Installation options differ from the options recorded by the manifest';
+      return 'Installation options differ from the options recorded by the manifest; run `agentkeeper repair` to reconcile them';
     }
 
     const expected =
@@ -586,7 +595,14 @@ export class ManagedInstallationPlanner {
         if (entry.originalChecksum !== null || entry.backupPath !== null) {
           return `Owned artifact ${JSON.stringify(entry.id)} unexpectedly claims an original file`;
         }
-        if (checksum(artifact.content) !== entry.installedChecksum || artifact.mode !== entry.mode) {
+        // Not a tamper signal: this compares what the manifest recorded with
+        // what *this build* generates, so any release that edits a hook or
+        // shim body lands here. Repair reconciles it; whether the file on disk
+        // still matches the manifest is a separate check, and stays strict.
+        if (
+          operation !== 'repair' &&
+          (checksum(artifact.content) !== entry.installedChecksum || artifact.mode !== entry.mode)
+        ) {
           return `Owned artifact ${JSON.stringify(entry.id)} does not match current generated content`;
         }
       }
@@ -594,7 +610,9 @@ export class ManagedInstallationPlanner {
 
     if (operation !== 'deactivate') {
       for (const artifact of this.ownedArtifacts()) {
-        if (!seen.has(artifact.id)) {
+        // A release that introduces a managed artifact leaves every existing
+        // manifest without it. Installing what is missing is repair's job.
+        if (!seen.has(artifact.id) && operation !== 'repair') {
           return `Manifest is missing owned artifact ${JSON.stringify(artifact.id)}`;
         }
       }

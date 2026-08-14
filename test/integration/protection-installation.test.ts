@@ -611,3 +611,45 @@ function runHook(hook: string): { status: number; stderr: string } {
   const run = spawnSync('/bin/sh', [hook], { encoding: 'utf8' });
   return { status: run.status ?? 1, stderr: run.stderr ?? '' };
 }
+
+describe('an upgrade that changes managed content stays repairable', () => {
+  /**
+   * Every release that touches a hook or shim body changes the configuration
+   * checksum. Refusing `repair` there leaves `deactivate` + `activate` as the
+   * only way forward — which reaches the same state through a window with no
+   * protection at all. A refusal that makes the safe path harder than the
+   * unsafe one protects nothing.
+   */
+  async function upgradedPlanner(): Promise<ProtectionInstallationPlanner> {
+    const { files, service, git, planner, executor } = await fixture();
+    await executor.execute(await planner.plan('activate'));
+    return new ProtectionInstallationPlanner(
+      files,
+      {
+        ...baseOptions(),
+        additionalOwnedArtifacts: [
+          {
+            id: 'release-changed-artifact',
+            path: STATE.join('shell/extra.sh'),
+            content: '# a later release writes this differently\n',
+          },
+        ],
+      },
+      'darwin',
+      service,
+      git,
+    );
+  }
+
+  it('repairs instead of refusing', async () => {
+    const plan = await (await upgradedPlanner()).plan('repair');
+    expect(plan.conflicts, JSON.stringify(plan.conflicts)).toEqual([]);
+  });
+
+  it('still refuses to activate over it, and names the way out', async () => {
+    const plan = await (await upgradedPlanner()).plan('activate');
+    const mismatch = plan.conflicts.find((c) => c.code === 'configuration-mismatch');
+    expect(mismatch, JSON.stringify(plan.conflicts)).toBeDefined();
+    expect(mismatch?.message).toMatch(/repair/i);
+  });
+});

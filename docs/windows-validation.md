@@ -47,6 +47,21 @@ file with no explicit deny entry. They found these remaining incompatibilities:
 - Deny-default network policy blocks an echo connection even within the same
   sandbox process. A TCP relay needs its own demonstrated policy; a Linux-style
   localhost relay cannot be assumed to work unchanged.
+- Pre-existing hardlinks inside the writable workspace bypass both an explicit
+  outside-path deny and the default deny. The host verified that the confined
+  child read and modified the same outside test objects through these aliases.
+  Junction reads/writes were denied. Native PSEC path policy therefore cannot
+  replace filesystem-topology validation; a future PSEC launcher must reject
+  multiply linked files before launch and qualify the lifetime of its object
+  pins. The legacy launcher already rejects such files; the developer MXC
+  executor deliberately bypasses that guard to characterize the native policy.
+
+The hardlink reproduction was executed against the integrity-pinned MXC 1.0.0
+executor on the PSEC 1.0 host, with temporary canary files only:
+[native Windows alias qualification](https://github.com/lovelasxyz/agentkeeper/actions/runs/37974861151/job/113970469855).
+It remains a failing regression requirement. It is not a result for PSEC 1.1,
+nor a shipped agentkeeper backend; the production candidate needs its own
+pre-launch alias refusal tests before these raw OS tests can qualify a release.
 
 The separate `windows-psec` CI job runs these native tests independently of the
 dependency install and legacy launcher. Packaging depends on it. On a host

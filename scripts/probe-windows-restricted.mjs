@@ -104,7 +104,10 @@ try {
       "$ErrorActionPreference = 'Stop'; " +
       "$root = 'Registry::HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters'; " +
       "@((Get-Item -LiteralPath $root); (Get-ChildItem -LiteralPath $root -Recurse)) | " +
-      "Sort-Object Name | ForEach-Object { $_.Name + ' ' + (Get-Acl -LiteralPath $_.PSPath).Sddl }"],
+      // GitHub's pwsh environment can point Windows PowerShell at incompatible
+      // modules. Use the registry object's framework method, not Get-Acl.
+      "Sort-Object Name | ForEach-Object { $_.Name + ' ' + " +
+      "$_.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access) }"],
     { timeout: 20_000, maxBuffer: 1024 * 1024 })).stdout;
   const catalogBefore = await catalogAcl();
   // Red controls: the real workload must reject an unrestricted process, not

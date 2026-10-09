@@ -205,6 +205,7 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
   KernelGrants kernel(sid.get());
   Handle job(CreateJobObjectW(nullptr, nullptr));
   auto finish = [&](int code) {
+    if (code != 0) std::fprintf(stderr, "restricted probe: result=%d win32=%lu\n", code, GetLastError());
     // Drain the tree before revoking any capability or closing its desktop.
     const bool drained = job.get() && TerminateAndDrainJob(job.get(), ERROR_CANCELLED);
     const bool kernel_clean = kernel.Close();

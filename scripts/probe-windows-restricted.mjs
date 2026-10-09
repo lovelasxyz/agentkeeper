@@ -2,7 +2,7 @@
 // No account, service, firewall rule or production artifact is installed.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,8 +27,17 @@ try {
     await readFile(new URL('../test/native/windows-restricted-workload.cjs', import.meta.url)));
   await writeFile(join(workspace, 'module.cjs'), 'module.exports=42;');
   await writeFile(join(workspace, 'module.mjs'), 'export default 43;');
-  const git = (await execute('where.exe', ['git'])).stdout.trim().split(/\r?\n/)[0];
-  if (!git) throw new Error('Git must be installed for the compatibility proof');
+  const installedGit = (await execute('where.exe', ['git'])).stdout.trim().split(/\r?\n/)[0];
+  if (!installedGit) throw new Error('Git must be installed for the compatibility proof');
+  // Git for Windows contains intentional executable hardlinks. Use ordinary
+  // copies for this experiment, retaining the alias guard unchanged. A future
+  // backend must explicitly qualify how it handles the installed toolchain.
+  const gitRoot = resolve(dirname(installedGit), '..');
+  const copiedGitRoot = join(root, 'toolchain/Git');
+  await mkdir(join(copiedGitRoot, 'bin'), { recursive: true });
+  await cp(installedGit, join(copiedGitRoot, 'bin/git.exe'));
+  await cp(join(gitRoot, 'mingw64/bin'), join(copiedGitRoot, 'mingw64/bin'), { recursive: true });
+  const git = join(copiedGitRoot, 'bin/git.exe');
   // Only disposable fixtures receive low-integrity labels. Host projects and
   // toolchain integrity labels are never changed by this experiment.
   await execute('icacls.exe', [workspace, '/setintegritylevel', '(OI)(CI)L', '/T', '/Q'], { timeout: 15_000 });
@@ -76,7 +85,7 @@ try {
     assert.equal(result.stdout.includes('"networkQualified":false'), true);
   } catch (error) {
     report('Restricted token compatibility failed',
-      String(error.stdout ?? '') + String(error.stderr ?? '') + '\n' + error.message);
+      String(error.stdout ?? '') + String(error.stderr ?? '') + '\n' + `native exit: ${error.code}\n` + error.message);
     failure = error;
   }
   assert.equal(await readFile(outside, 'utf8'), 'restricted-token outside canary');

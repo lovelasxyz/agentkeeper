@@ -5,7 +5,9 @@
 #undef wmain
 #include <sddl.h>
 #include <winternl.h>
+#include <bcrypt.h>
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 namespace {
 struct KernelGrant {
@@ -182,7 +184,10 @@ HANDLE RestrictedToken(PSID sid, std::vector<BYTE>* user) {
   // Both reads and writes must pass the restricting-SID access check.
   // WRITE_RESTRICTED would expose the host's readable secrets.
   if (!CreateRestrictedToken(original.get(), DISABLE_MAX_PRIVILEGE, 1, &disabled,
-                            0, nullptr, 2, restricted, &result)) return nullptr;
+                            0, nullptr, 2, restricted, &result)) {
+    std::fprintf(stderr, "restricted probe: CreateRestrictedToken win32=%lu\n", GetLastError());
+    return nullptr;
+  }
   Handle token(result);
   PACL dacl = nullptr;
   EXPLICIT_ACCESSW entries[2]{};
@@ -195,24 +200,44 @@ HANDLE RestrictedToken(PSID sid, std::vector<BYTE>* user) {
   if (SetEntriesInAclW(2, entries, nullptr, &dacl) != ERROR_SUCCESS) return nullptr;
   LocalAllocation dacl_owner(dacl);
   TOKEN_DEFAULT_DACL default_dacl{dacl};
-  if (!SetTokenInformation(token.get(), TokenDefaultDacl, &default_dacl, sizeof(default_dacl))) return nullptr;
+  if (!SetTokenInformation(token.get(), TokenDefaultDacl, &default_dacl, sizeof(default_dacl))) {
+    std::fprintf(stderr, "restricted probe: TokenDefaultDacl win32=%lu\n", GetLastError());
+    return nullptr;
+  }
   PSID low = nullptr;
   if (!ConvertStringSidToSidW(L"S-1-16-4096", &low)) return nullptr;
   LocalAllocation low_owner(low);
   TOKEN_MANDATORY_LABEL label{{low, SE_GROUP_INTEGRITY}};
   if (!SetTokenInformation(token.get(), TokenIntegrityLevel, &label,
-          static_cast<DWORD>(sizeof(label) + GetLengthSid(low)))) return nullptr;
+          static_cast<DWORD>(sizeof(label) + GetLengthSid(low)))) {
+    std::fprintf(stderr, "restricted probe: TokenIntegrityLevel win32=%lu\n", GetLastError());
+    return nullptr;
+  }
   DWORD appcontainer = 1;
   if (!IsTokenRestricted(token.get()) ||
       !GetTokenInformation(token.get(), TokenIsAppContainer, &appcontainer, sizeof(appcontainer), &size) ||
-      appcontainer != 0) return nullptr;
+      appcontainer != 0) {
+    std::fprintf(stderr, "restricted probe: token verification win32=%lu appcontainer=%lu\n", GetLastError(), appcontainer);
+    return nullptr;
+  }
   return token.release();
 }
 
 int RunProof(const Request& request, DWORD parent, const std::wstring& outside) {
   std::wstring profile;
+  SidAllocation profile_sid;
+  if (FAILED(CreateUniqueProfile(&profile, &profile_sid))) return kProfileFailed;
+  // This is an ordinary restricting SID, not an AppContainer package identity.
   SidAllocation sid;
-  if (FAILED(CreateUniqueProfile(&profile, &sid))) return kProfileFailed;
+  DWORD random[4]{};
+  SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+  if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(random), sizeof(random),
+      BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0 ||
+      !AllocateAndInitializeSid(&authority, 5, SECURITY_NT_NON_UNIQUE,
+          random[0], random[1], random[2], random[3], 0, 0, 0, sid.out())) {
+    DeleteAppContainerProfile(profile.c_str());
+    return kSidFailed;
+  }
   std::vector<GrantSpec> grants, denies, applied;
   ObjectPins pins;
   KernelGrants kernel(sid.get());

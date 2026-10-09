@@ -56,6 +56,16 @@ async function main() {
     assert.throws(() => fs.linkSync(outside, 'new-outside-link'), { code: /^(EPERM|EACCES)$/ });
   });
 
+  for (const alias of ['outside-denied-hardlink', 'outside-ungranted-hardlink',
+    path.join('outside-junction', 'secret.txt')]) {
+    await check(`reading pre-existing alias ${alias}`, () => {
+      assert.throws(() => fs.readFileSync(alias), { code: /^(EPERM|EACCES)$/ });
+    });
+    await check(`writing pre-existing alias ${alias}`, () => {
+      assert.throws(() => fs.writeFileSync(alias, 'outside mutation canary'), { code: /^(EPERM|EACCES)$/ });
+    });
+  }
+
   for (const stdio of ['inherit', 'ignore', 'pipe']) {
     await check(`descendant ${stdio}`, () => {
       const code = "try{require('node:fs').readFileSync(process.argv[1]);process.exit(42)}catch(e){process.exit(/^(EPERM|EACCES)$/.test(e.code)?0:43)}";

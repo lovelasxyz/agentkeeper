@@ -2,7 +2,7 @@
 // Nothing is installed into node_modules or assembled into the npm package.
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, parse, resolve } from 'node:path';
@@ -48,7 +48,16 @@ try {
     await mkdir(workspace);
     const outside = join(root, 'outside.secret');
     await writeFile(outside, 'must not be readable');
-    await writeFile(join(root, 'ungranted.secret'), 'default-deny canary without an explicit deny entry');
+    const ungranted = join(root, 'ungranted.secret');
+    await writeFile(ungranted, 'default-deny canary without an explicit deny entry');
+    const outsideDirectory = join(root, 'outside-directory');
+    await mkdir(outsideDirectory);
+    await writeFile(join(outsideDirectory, 'secret.txt'), 'outside junction canary');
+    // Create aliases on the trusted host first. Refusing to create a link
+    // inside the sandbox does not establish protection against existing ones.
+    await link(outside, join(workspace, 'outside-denied-hardlink'));
+    await link(ungranted, join(workspace, 'outside-ungranted-hardlink'));
+    await symlink(outsideDirectory, join(workspace, 'outside-junction'), 'junction');
     const script = join(workspace, 'qualification.cjs');
     await writeFile(script, await readFile(new URL('../test/native/windows-psec-workload.cjs', import.meta.url)));
     await writeFile(join(workspace, 'module.cjs'), 'module.exports=42;');
@@ -113,6 +122,14 @@ try {
           failed = true;
           report(`Microsoft MXC toolchain and IPC failed (pipe allowed: ${pipeAllowed})`,
             String(error.stdout ?? '') + String(error.stderr ?? '') + '\n' + error.message);
+        }
+        for (const [path, expected] of [[outside, 'must not be readable'],
+          [ungranted, 'default-deny canary without an explicit deny entry'],
+          [join(outsideDirectory, 'secret.txt'), 'outside junction canary']]) {
+          if (await readFile(path, 'utf8') !== expected) {
+            failed = true;
+            report('Windows PSEC outside mutation', `Sandbox mutated an outside fixture through an alias: ${path}`);
+          }
         }
       }
       if (failed) throw new Error('Windows PSEC toolchain/IPC qualification failed');

@@ -69,10 +69,6 @@ jobs:
       - run: npm run clean
       - run: npm run build
 
-      - name: Probe Microsoft MXC host support (qualification only)
-        if: runner.os == 'Windows'
-        run: npm run probe:windows-mxc
-
       # After `clean` and `build`, so the helper survives into test:sandbox.
       - name: Build the Windows AppContainer helper (runner architecture, not shipped)
         if: runner.os == 'Windows'
@@ -140,9 +136,33 @@ jobs:
           arch: amd64_arm64
       - run: node scripts/build-windows-sandbox.mjs arm64
 
+  windows-psec:
+    name: Native PSEC qualification (windows-11-arm)
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # This proof uses only Node built-ins and the integrity-pinned native
+      # executor. It can run independently of the project's dependency install
+      # and the legacy launcher, while remaining a mandatory packaging gate.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          # Git on this ARM64 host is x64 too. Exercise its actual Win32 ABI.
+          arch: amd64
+      - name: Compile the Win32 metadata compatibility probe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          cl.exe /nologo /std:c++20 /EHsc /W4 /O2 /MT test/native/windows-psec-compat.cpp /Fobuild/windows-psec-compat.obj /Febuild/windows-psec-compat.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: npm run probe:windows-mxc
+
   package:
     name: package contents
-    needs: [verify, windows-native-arm64]
+    needs: [verify, windows-native-arm64, windows-psec]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

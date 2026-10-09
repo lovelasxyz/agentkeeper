@@ -7,6 +7,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 if (process.platform !== 'win32') throw new Error('MXC host qualification requires Windows');
 if (!['x64', 'arm64'].includes(process.arch)) throw new Error('Unsupported Windows architecture');
@@ -36,17 +37,23 @@ try {
   if (stderr.trim() !== '') console.log(stderr);
   report('Microsoft MXC host support', stdout + stderr);
   const host = JSON.parse(stdout);
-  if (host.tier === 'base-container' && host.probes?.baseContainerSupportsDenyPaths === true) {
+  if (host.tier !== 'base-container' || host.probes?.baseContainerSupportsDenyPaths !== true) {
+    throw new Error('Qualification requires native Windows 11 PSEC with filesystem denies; fallback tiers do not qualify');
+  }
+  {
     const workspace = join(root, 'workspace');
     await mkdir(workspace);
     const outside = join(root, 'outside.secret');
     await writeFile(outside, 'must not be readable');
+    await writeFile(join(root, 'ungranted.secret'), 'default-deny canary without an explicit deny entry');
     const script = join(workspace, 'qualification.cjs');
     await writeFile(script, await readFile(new URL('../test/native/windows-psec-workload.cjs', import.meta.url)));
     await writeFile(join(workspace, 'module.cjs'), 'module.exports=42;');
     await writeFile(join(workspace, 'module.mjs'), 'export default 43;');
     const git = (await execute('where.exe', ['git'])).stdout.trim().split(/\r?\n/)[0];
     if (!git) throw new Error('Git is required for Windows toolchain qualification');
+    const compat = fileURLToPath(new URL('../build/windows-psec-compat.exe', import.meta.url));
+    await readFile(compat);
     const pipePath = String.raw`\\.\pipe\agentkeeper-mxc-${randomUUID()}`;
     const pipe = await echoServer(pipePath);
     servers.push(pipe);
@@ -59,7 +66,7 @@ try {
       // Keep the native filesystem policy intact and test its supported
       // entrypoint option instead of granting recursive access to drive roots.
       process: { commandLine: `"${process.execPath}" --preserve-symlinks --preserve-symlinks-main "${script}" "${outside}" ${hostPort} "${pipePath}" false "${git}"`, cwd: workspace, timeout: 30_000 },
-      filesystem: { readwritePaths: [workspace], readonlyPaths: [dirname(process.execPath), resolve(dirname(git), '..')], deniedPaths: [outside] },
+      filesystem: { readwritePaths: [workspace], readonlyPaths: [dirname(process.execPath), resolve(dirname(git), '..'), compat], deniedPaths: [outside] },
       network: { egress: { default: 'deny' }, ingress: { default: 'deny', hostLoopback: 'deny' } },
       telemetry: { enabled: false },
       // Console runtimes initialise Win32k. Keep clipboard and input injection
@@ -72,7 +79,7 @@ try {
         if (pipeAllowed) {
           config.filesystem.readwritePaths.push(pipePath);
         }
-        config.process.commandLine = `"${process.execPath}" --preserve-symlinks --preserve-symlinks-main "${script}" "${outside}" ${hostPort} "${pipePath}" ${pipeAllowed} "${git}"`;
+        config.process.commandLine = `"${process.execPath}" --preserve-symlinks --preserve-symlinks-main "${script}" "${outside}" ${hostPort} "${pipePath}" ${pipeAllowed} "${git}" "${compat}"`;
         const configPath = join(root, `policy-${pipeAllowed}.json`);
         await writeFile(configPath, JSON.stringify(config));
         try {
@@ -81,7 +88,9 @@ try {
           if (JSON.parse(requestProbe.stdout).tier !== 'base-container') {
             throw new Error('Refusing to evaluate a fallback tier');
           }
-          const result = await execute(executor, [configPath], { timeout: 40_000, maxBuffer: 256 * 1024 });
+          const execution = execute(executor, [configPath], { timeout: 40_000, maxBuffer: 256 * 1024 });
+          execution.child.stdin.end('host-broker-handle-canary');
+          const result = await execution;
           report(`Microsoft MXC toolchain and IPC (pipe allowed: ${pipeAllowed})`, result.stdout + result.stderr);
         } catch (error) {
           failed = true;

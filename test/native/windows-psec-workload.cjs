@@ -3,8 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const cp = require('node:child_process');
 const net = require('node:net');
+const path = require('node:path');
 
-const [outside, hostPort, pipePath, pipeAllowed, git] = process.argv.slice(2);
+const [outside, hostPort, pipePath, pipeAllowed, git, compat] = process.argv.slice(2);
 const failures = [];
 
 async function check(name, run) {
@@ -36,8 +37,13 @@ async function roundTrip(address) {
 }
 
 async function main() {
+  await check('pre-opened host IPC handle', () => {
+    assert.equal(fs.readFileSync(0, 'utf8'), 'host-broker-handle-canary');
+  });
   await check('filesystem, CommonJS and ESM', async () => {
     assert.throws(() => fs.readFileSync(outside), { code: /^(EPERM|EACCES)$/ });
+    assert.throws(() => fs.readFileSync(path.join(path.dirname(outside), 'ungranted.secret')),
+      { code: /^(EPERM|EACCES)$/ });
     fs.writeFileSync('inside.txt', 'ok');
     fs.renameSync('inside.txt', 'renamed.txt');
     assert.equal(fs.readFileSync('renamed.txt', 'utf8'), 'ok');
@@ -67,9 +73,34 @@ async function main() {
       assert.equal(child.status, 0);
     });
   }
+  await check('Win32 directory metadata', () => {
+    const child = cp.spawnSync(compat, [], { encoding: 'utf8', timeout: 5000 });
+    console.log(JSON.stringify({ metadata: child.stdout, status: child.status, error: child.error?.code, stderr: child.stderr }));
+    assert.equal(child.status, 0);
+  });
 
   await check('host TCP denial', async () => {
     assert.equal(await roundTrip(Number(hostPort)), false, 'Host TCP must remain denied');
+  });
+  await check('intra-sandbox TCP relay', async () => {
+    const sockets = new Set();
+    const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on('error', () => socket.destroy());
+      socket.once('close', () => sockets.delete(socket));
+      socket.pipe(socket);
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen({ host: '127.0.0.1', port: 0 }, resolve);
+      });
+      assert.equal(await roundTrip(server.address().port), true,
+        'An internal relay must work with external network capabilities absent');
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
   await check('scoped host IPC', async () => {
     const pipeReached = await roundTrip(pipePath);

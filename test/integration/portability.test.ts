@@ -89,6 +89,8 @@ describe('build and CI portability', () => {
     expect(workflow).toMatch(
       /Sandbox isolation tests \(Windows qualification gate\)\s+if: runner\.os == 'Windows'/,
     );
+    expect(workflow).toMatch(/windows-psec:\s+name:.*\(windows-11-arm\)/);
+    expect(workflow).toContain('needs: [verify, windows-native-arm64, windows-psec]');
   });
 
   it('refuses to package a native Windows backend', () => {

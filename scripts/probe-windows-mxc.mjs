@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 if (process.platform !== 'win32') throw new Error('MXC host qualification requires Windows');
@@ -53,9 +53,12 @@ try {
     const config = {
       version: '1.0.0', containment: 'processcontainer',
       process: { commandLine: `"${process.execPath}" "${script}"`, cwd: workspace, timeout: 20_000 },
-      filesystem: { readwritePaths: [workspace], readonlyPaths: [join(process.execPath, '..')], deniedPaths: [outside] },
+      filesystem: { readwritePaths: [workspace], readonlyPaths: [dirname(process.execPath)], deniedPaths: [outside] },
       network: { egress: { default: 'deny' }, ingress: { default: 'deny', hostLoopback: 'deny' } },
       telemetry: { enabled: false },
+      // Console runtimes initialise Win32k. Keep clipboard and input injection
+      // denied while permitting the runtime's normal subsystem initialisation.
+      ui: { disable: false, clipboard: 'none', injection: false },
     };
     const configPath = join(root, 'policy.json');
     await writeFile(configPath, JSON.stringify(config));

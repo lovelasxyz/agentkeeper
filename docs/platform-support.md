@@ -9,7 +9,7 @@ report today.
 |---|---|---|---|
 | Linux x64 / arm64 | bubblewrap + Unix-socket broker | `bwrap` installed, user namespaces permitted | `PROTECTED` |
 | macOS (Apple Silicon and x64) | Seatbelt (`sandbox-exec`) + loopback broker | Built in | `DEGRADED` — see below |
-| Windows 10/11 | — none shipped | — | `UNPROTECTED`, and protected launches refuse to start |
+| Windows | — none shipped | — | `UNPROTECTED`, and protected launches refuse to start |
 | Anything else | none | — | `UNPROTECTED`, and protected launches refuse to start |
 
 Node ≥ 22.21.0 is required. That is the floor where Node's built-in HTTP
@@ -90,7 +90,7 @@ writes the furthest stage it reached (`boot` → `allowed-read` →
 `deny-checked` → `child-boot` → `child-returned`) into the workspace, so a
 hang is *observed* in CI logs rather than guessed at. The helper is still not
 shipped: the package gate refuses `dist/native/` until the suite passes on
-Windows 10 and 11, x64 and arm64, and the remaining requirements in
+supported Windows 11 builds, x64 and arm64, and the remaining requirements in
 [Windows qualification](windows-validation.md) are met. A general
 `CheckNetIsolation LoopbackExempt` exemption is not a destination allowlist:
 it also exposes unrelated host services, so it cannot be used as the broker

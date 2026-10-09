@@ -7,6 +7,30 @@ package still refuses `dist/native`, and Windows installations still report
 
 ## Architecture
 
+The selected release target is **Windows 11 with current updates**. Windows 10
+support is outside this release. The production direction is an OS-managed
+process security environment (PSEC/BaseContainer); the legacy AppContainer
+launcher below remains a qualification candidate, not an approved fallback.
+Runtime capability checks must reject unsupported hosts and policies before
+starting an agent. A Windows version string alone does not establish support.
+
+The developer-only `probe:windows-mxc` command evaluates Microsoft's pinned
+MXC 1.0.0 native executor without adding a runtime dependency or packaging it.
+CI probes found BaseContainer and native filesystem denies on Windows 11 ARM64;
+the Windows Server x64 runner has only the legacy AppContainer tier. These are
+capability observations, not completed end-to-end qualification.
+
+Actual legacy tests now show working direct isolation, workspace edits,
+concurrency, hardlink/junction refusals and ACL rollback. Inherited descendant
+stdio works on both runners. Node 22 pipe-based descendants hang on both;
+ignored stdio fails with EPERM on the Server runner and succeeds on Windows 11.
+The required gate stays red until agent subprocess compatibility is resolved.
+
+References:
+
+- [Microsoft MXC release announcement, October 7, 2026](https://blogs.windows.com/windowsdeveloper/2026/10/07/microsoft-execution-containers-policy-driven-containment-for-ai-agents/)
+- [PSEC network policy and capability limits](https://github.com/microsoft/mxc/blob/main/docs/backends/process-container/networking.md)
+
 Keep the separate C++ executable. It uses Win32 security capabilities and a
 kill-on-close Job Object without loading native code into the Node process or
 requiring a Node ABI-specific addon. A future release can bundle precompiled
@@ -82,7 +106,7 @@ Portable tests and source assertions cannot substitute for these OS tests.
 
 ## Still required before shipping
 
-1. Compile and execute the full Win32 helper on Windows 10/11, x64/ARM64,
+1. Compile and execute the selected native backend on supported Windows 11 x64/ARM64,
    including a standard-user installation of Node under Program Files. Verify
    ACLs and profiles after normal exit, failure, cancellation and timeout.
 2. Implement and qualify a destination-controlled Windows egress transport.

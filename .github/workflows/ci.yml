@@ -55,6 +55,8 @@ jobs:
 
       - run: npm ci
       - run: npm run typecheck
+      - name: Compiled Windows path contract (portable C++)
+        run: npm run test:windows-native
 
       - name: Architecture boundaries
         run: npm run lint:arch

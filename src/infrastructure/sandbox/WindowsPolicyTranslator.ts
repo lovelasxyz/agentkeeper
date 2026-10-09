@@ -101,6 +101,8 @@ export class WindowsPolicyTranslator {
       overlayHome,
       ...AGENT_STATE_DIRECTORIES.map((relative) => overlayHome.join(relative)),
       overlayHome.join('tmp'),
+      overlayHome.join('AppData', 'Roaming'),
+      overlayHome.join('AppData', 'Local'),
     ];
     return {
       reads: deduplicate([...reads, ResourceRef.subtree(overlayHome)]),

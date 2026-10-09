@@ -25,13 +25,34 @@ describe('Windows native isolation contract (portable source audit)', () => {
     expect(source).not.toMatch(/ShellExecute|WinExec|\bsystem\s*\(/);
   });
 
-  it('closes broad handle inheritance and grants no network capability', () => {
+  it('inherits only explicit standard streams and grants no network capability', () => {
     expect(source).toMatch(
-      /CreateProcessW\([\s\S]*?nullptr, nullptr, FALSE,[\s\S]*?EXTENDED_STARTUPINFO_PRESENT/,
+      /CreateProcessW\([\s\S]*?nullptr, nullptr, TRUE,[\s\S]*?EXTENDED_STARTUPINFO_PRESENT/,
     );
+    expect(source).toMatch(/PROC_THREAD_ATTRIBUTE_HANDLE_LIST/);
+    expect(source).toMatch(/STARTF_USESTDHANDLES/);
     expect(source).toMatch(/capabilities\.Capabilities\s*=\s*nullptr/);
     expect(source).toMatch(/capabilities\.CapabilityCount\s*=\s*0/);
     expect(source).not.toMatch(/L"(?:internetClient|privateNetworkClientServer)"/);
+  });
+
+  it('validates all granted objects before any ACL mutation and changes ACLs by handle', () => {
+    expect(source.indexOf('ValidateAclObjects(request,')).toBeLessThan(
+      source.indexOf('ApplyAclChanges(\n          desired_grants'),
+    );
+    expect(source).toContain('FILE_FLAG_OPEN_REPARSE_POINT');
+    expect(source).toContain('info.nNumberOfLinks != 1');
+    expect(source).toContain('FILE_ATTRIBUTE_REPARSE_POINT');
+    expect(source).toContain('GetSecurityInfo(');
+    expect(source).toContain('SetSecurityInfo(');
+    expect(source).not.toMatch(/SetNamedSecurityInfoW\s*\(/);
+  });
+
+  it('holds a separate unforgeable result channel until the sandbox tree is reclaimed', () => {
+    expect(source).toContain('AKSRES01');
+    expect(source).toMatch(/GENERIC_WRITE, FILE_SHARE_READ,[\s\S]{0,100}CREATE_NEW/);
+    expect(source).toContain('NativeResult::Child(child_exit)');
+    expect(source).not.toContain('return static_cast<int>(child_exit)');
   });
 
   it('uses Job Object only to bind the already-suspended AppContainer process tree', () => {

@@ -49,6 +49,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
     "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
+    "test:windows-native": "node scripts/test-windows-native.mjs",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit --project integration",
@@ -59,6 +60,7 @@
     "coverage": "vitest run --project unit --project integration --coverage",
     "lint:arch": "depcruise src --config .dependency-cruiser.cjs",
     "verify": "npm run typecheck && npm run lint:arch && npm run coverage && npm run test:sandbox",
+    "verify:windows": "node scripts/verify-windows.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "prepack": "npm run build && npm run verify:package",
     "bench": "npm run build && node test/e2e/bench.mjs dist/cli.js",

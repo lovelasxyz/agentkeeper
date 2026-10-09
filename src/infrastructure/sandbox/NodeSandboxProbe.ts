@@ -59,7 +59,8 @@ export class NodeSandboxProbe implements SandboxProbe {
 
     const context: PathContext = { home, workspace, platform: request.platform };
     const stagePath = workspace.join(CANARY_STAGE_FILE).value;
-    const runtimeRoot = AbsolutePath.of(process.execPath).parent.parent;
+    const executableDirectory = AbsolutePath.of(process.execPath).parent;
+    const runtimeRoot = request.platform === 'win32' ? executableDirectory : executableDirectory.parent;
     const policy = new SandboxPolicy({
       workspace,
       reads: [ResourceRef.subtree(workspace), ResourceRef.subtree(runtimeRoot)],
@@ -74,7 +75,9 @@ export class NodeSandboxProbe implements SandboxProbe {
     try {
       const result = await withDeadline(request.runner.run(policy, context, {
         signal: abandon.signal,
-        deadlineMs: CANARY_TIMEOUT_MS,
+        // Leave time for the native owner to drain its Job and undo ACLs
+        // before the outer watchdog resorts to killing the helper.
+        deadlineMs: CANARY_CHILD_TIMEOUT_MS,
         executable: process.execPath,
         args: ['-e', canaryScript(allowedCanary.value, deniedCanary.value, stagePath)],
         cwd: workspace,
@@ -133,6 +136,7 @@ function errorMessage(error: unknown): string {
 
 /** A canary is a few milliseconds of work; anything near this is stuck. */
 const CANARY_TIMEOUT_MS = 30_000;
+const CANARY_CHILD_TIMEOUT_MS = 15_000;
 
 function withDeadline<T>(
   work: Promise<T>,
@@ -193,7 +197,7 @@ function canaryScript(allowedPath: string, deniedPath: string, stagePath: string
     // probe read that as a broken boundary and reported UNPROTECTED on a
     // platform whose boundary was fine.
     `const childScript = ${JSON.stringify(childCanarySource(stagePath))};`,
-    "const child = cp.spawnSync(process.execPath, ['-e', childScript, denied], { stdio: 'ignore' });",
+    "const child = cp.spawnSync(process.execPath, ['-e', childScript, denied], { stdio: 'ignore', timeout: 5000, killSignal: 'SIGKILL' });",
     "stage('child-returned');",
     `if (child.status === ${EXIT_DENY_CANARY_READABLE}) process.exit(${EXIT_CHILD_DENY_CANARY_READABLE});`,
     `if (child.status !== 0) process.exit(${EXIT_CHILD_PROBE_FAILED});`,

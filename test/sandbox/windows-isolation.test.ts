@@ -1,5 +1,5 @@
 import { createServer } from 'node:net';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -78,7 +78,7 @@ describeOnWindows('isolation actually isolates (Windows / AppContainer)', () => 
     try {
       const address = server.address();
       if (address === null || typeof address === 'string') throw new Error('No TCP test port');
-      const runtime = AbsolutePath.of(process.execPath).parent.parent;
+      const runtime = AbsolutePath.of(process.execPath).parent;
       const policy = new SandboxPolicy({
         workspace,
         reads: [ResourceRef.subtree(workspace), ResourceRef.subtree(runtime)],
@@ -115,6 +115,90 @@ describeOnWindows('isolation actually isolates (Windows / AppContainer)', () => 
       });
     }
   });
+
+  it('writes, renames and deletes workspace files with a real sanitised environment', async () => {
+    const result = await runScript([
+      "const fs=require('node:fs');",
+      "fs.writeSync(1,'Windows confined stdout works\\n');",
+      "fs.writeSync(2,'Windows confined stderr works\\n');",
+      "fs.writeFileSync('workspace-edit.tmp','ok');",
+      "fs.renameSync('workspace-edit.tmp','workspace-edit.txt');",
+      "if(fs.readFileSync('workspace-edit.txt','utf8')!=='ok')process.exit(41);",
+      "fs.unlinkSync('workspace-edit.txt');",
+      "if(!process.env.SystemRoot||!process.env.APPDATA||!process.env.LOCALAPPDATA)process.exit(42);",
+      "if(!process.env.APPDATA.startsWith(process.env.USERPROFILE))process.exit(43);",
+    ].join(''));
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.each([200, 203, 208])('preserves actual child exit %i instead of declaring a native failure', async (code) => {
+    expect((await runScript(`process.exit(${code})`)).exitCode).toBe(code);
+  });
+
+  it('reclaims a hung child through the helper deadline and can immediately run again', async () => {
+    await expect(runScript('setInterval(()=>{},1000)', 500)).rejects.toMatchObject({
+      code: 'windows.child-timed-out',
+    });
+    expect((await runScript('process.exit(0)')).exitCode).toBe(0);
+  });
+
+  it('supports concurrent sessions without losing each other\'s workspace ACEs', async () => {
+    const results = await Promise.all(Array.from({ length: 4 }, (_, index) => runScript([
+      "const fs=require('node:fs');",
+      `const path='parallel-${index}.txt';`,
+      "let ticks=0;const timer=setInterval(()=>{fs.writeFileSync(path,'ok');if(++ticks===8){clearInterval(timer);fs.unlinkSync(path);}},50);",
+    ].join(''))));
+    expect(results.map((result) => result.exitCode)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('refuses an existing hardlink before granting the outside object any access', async () => {
+    const outside = join(root, 'outside-hardlink-secret.txt');
+    const alias = workspace.join('innocent.txt').value;
+    await writeFile(outside, 'secret');
+    await link(outside, alias);
+    try {
+      await expect(runScript("require('node:fs').writeFileSync('launched.txt','unsafe')")).rejects.toMatchObject({
+        code: 'windows.unsafe-path',
+      });
+      await expect(readFile(workspace.join('launched.txt').value)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(outside, 'utf8')).toBe('secret');
+    } finally {
+      await rm(alias, { force: true });
+      await rm(outside, { force: true });
+    }
+  });
+
+  it('refuses a junction inside the workspace before recursively changing ACLs', async () => {
+    const outside = join(root, 'outside-junction');
+    const alias = workspace.join('junction').value;
+    await mkdir(outside);
+    await symlink(outside, alias, 'junction');
+    try {
+      await expect(runScript('process.exit(0)')).rejects.toMatchObject({ code: 'windows.unsafe-path' });
+    } finally {
+      await rm(alias, { force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  async function runScript(script: string, deadlineMs = 15_000) {
+    const policy = new SandboxPolicy({
+      workspace,
+      reads: [ResourceRef.subtree(workspace), ResourceRef.subtree(AbsolutePath.of(process.execPath).parent)],
+      writes: [ResourceRef.subtree(workspace)],
+      denies: [], overrides: [], network: [],
+    });
+    return runner.run(policy, {
+      home: AbsolutePath.of(process.env['USERPROFILE'] ?? workspace.parent.value),
+      workspace, platform: 'win32',
+    }, {
+      executable: process.execPath, args: ['-e', script], cwd: workspace,
+      // The helper obtains SystemRoot from Win32. The ambient caller must
+      // neither choose it nor provide the canonical user's profile paths.
+      env: { PATH: process.env['PATH'] ?? '', SystemRoot: String.raw`C:\forged-windows` },
+      deadlineMs,
+    });
+  }
 });
 
 function windowsEnvironment(): Readonly<Record<string, string>> {

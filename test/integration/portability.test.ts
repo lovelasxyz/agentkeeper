@@ -108,7 +108,10 @@ describe('build and CI portability', () => {
     const publish = readFileSync(join(repository, '.github/workflows/publish.yml'), 'utf8');
     expect(publish).not.toMatch(/agentkeeper-sandbox\.exe/);
     expect(publish).not.toMatch(/win32-arm64/);
-    expect(publish).not.toMatch(/msvc-dev-cmd/);
+    // MSVC also compiles the portable path validator; that does not build or
+    // publish an AppContainer helper. Gate the artifact, not the compiler.
+    expect(publish).toContain('npm run test:windows-native');
+    expect(publish).not.toContain('npm run build:windows-sandbox');
     // Packing must not re-run prepack: a rebuild after verification would
     // decide the tarball contents from a different tree than the one verified.
     // The verifier owns that flag now, so assert it where it actually lives.

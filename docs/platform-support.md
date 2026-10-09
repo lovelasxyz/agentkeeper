@@ -65,6 +65,12 @@ and still works. The backend is replaceable without touching the policy domain.
 
 ## Windows — no backend shipped
 
+The current candidate has additional path/handle, result-channel and lifecycle
+hardening with regression tests. See [Windows qualification](windows-validation.md)
+for the implementation, a mandatory local Windows verification command and
+the remaining egress, agent-compatibility and crash-recovery requirements.
+Portable tests do not qualify this backend for shipping.
+
 The AppContainer backend was removed from the package: its confined child
 started and never exited, the deny canary timed out on every run, and the
 cause could not be found without a Windows machine with a debugger. Shipping

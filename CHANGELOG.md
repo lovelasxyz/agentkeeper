@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Windows candidate hardening (not yet shipped)
+
+- Reject ambiguous Win32 paths, reparse points and existing hardlinks before
+  recursive AppContainer grants; apply and revoke ACL entries through pinned
+  object handles, with serialized launcher ACL transactions.
+- Preserve redirected standard streams through an explicit handle allowlist;
+  obtain Windows runtime paths from Win32 and keep application data in the
+  disposable profile. Avoid unnecessary ancestor ACL changes.
+- Separate native failures from child exit codes using a protected result
+  channel. Bound nested canaries and reject probe deadlines equivalent to
+  Win32's `INFINITE` wait.
+- Add a compiled portable C++ path test, Windows link/lifecycle regressions and
+  `npm run verify:windows`. Real Windows qualification, controlled egress,
+  agent compatibility and crash recovery remain required before packaging
+  native helpers; see `docs/windows-validation.md`.
+
 ## 2.1.2
 
 ### Fixed

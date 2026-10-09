@@ -9,7 +9,9 @@ import { PathPattern } from '../../../../src/domain/value-objects/PathPattern.js
 import { ResourceRef } from '../../../../src/domain/value-objects/ResourceRef.js';
 import {
   WindowsSandboxRunner,
+  decodeWindowsSandboxResult,
   decodeWindowsSandboxRequest,
+  encodeWindowsSandboxRequest,
   resolveWindowsSandboxHelper,
   type WindowsSandboxInvocation,
   type WindowsSandboxRunnerDependencies,
@@ -39,6 +41,8 @@ function policy(overrides: {
 function dependencies(
   overrides: Partial<WindowsSandboxRunnerDependencies> = {},
 ): WindowsSandboxRunnerDependencies {
+  let lastExit = 0;
+  const invoke = overrides.invoke ?? (async () => ({ exitCode: 0, signal: null }));
   return {
     platform: 'win32',
     architecture: 'x64',
@@ -47,10 +51,24 @@ function dependencies(
     makeTemporaryDirectory: vi.fn(async () => String.raw`C:\Temp\agentkeeper-123`),
     makeDirectory: vi.fn(async () => undefined),
     writeFile: vi.fn(async () => undefined),
+    readFile: vi.fn(async () => lastExit >= 200 && lastExit <= 210
+      ? nativeResult(lastExit, 0) : nativeResult(0, lastExit)),
     removeDirectory: vi.fn(async () => undefined),
-    invoke: vi.fn(async () => ({ exitCode: 0, signal: null })),
     ...overrides,
+    invoke: vi.fn(async (...args: Parameters<typeof invoke>) => {
+      const result = await invoke(...args);
+      lastExit = result.exitCode;
+      return args[1][0] === '--diagnose' ? result : { exitCode: 0, signal: result.signal };
+    }),
   };
+}
+
+function nativeResult(error: number, childExit: number): Buffer {
+  const result = Buffer.alloc(16);
+  result.write('AKSRES01', 'ascii');
+  result.writeUInt32LE(error, 8);
+  result.writeUInt32LE(childExit, 12);
+  return result;
 }
 
 describe('WindowsSandboxRunner contract', () => {
@@ -241,7 +259,7 @@ describe('WindowsSandboxRunner contract', () => {
       },
       stdio: 'inherit',
     });
-    expect(deps.makeDirectory).toHaveBeenCalledTimes(7);
+    expect(deps.makeDirectory).toHaveBeenCalledTimes(9);
     expect(deps.removeDirectory).toHaveBeenCalledWith(String.raw`C:\Temp\agentkeeper-123`);
   });
 
@@ -304,5 +322,74 @@ describe('WindowsSandboxRunner contract', () => {
       name: 'WindowsSandboxBackendError',
       code: 'windows.acl-setup-failed',
     });
+  });
+
+  it.each([200, 203, 208, 0xffff_ffff])('preserves child exit %i through the separate result channel', async (exitCode) => {
+    const runner = new WindowsSandboxRunner(dependencies({
+      readFile: async () => nativeResult(0, exitCode),
+    }));
+    await expect(runner.run(policy(), context, {
+      executable: String.raw`C:\Program Files\nodejs\node.exe`,
+      args: [], cwd: workspace, env: {},
+    })).resolves.toEqual({ exitCode, signal: null });
+  });
+
+  it('refuses a missing result even when the helper exits successfully', async () => {
+    const runner = new WindowsSandboxRunner(dependencies({
+      readFile: async () => { throw new Error('ENOENT'); },
+    }));
+    await expect(runner.run(policy(), context, {
+      executable: String.raw`C:\Program Files\nodejs\node.exe`,
+      args: [], cwd: workspace, env: {},
+    })).rejects.toMatchObject({ code: 'windows.helper-probe-failed' });
+  });
+
+  it('keeps Windows application data in the disposable home and removes case aliases', async () => {
+    const deps = dependencies();
+    await new WindowsSandboxRunner(deps).run(policy(), context, {
+      executable: String.raw`C:\Program Files\nodejs\node.exe`,
+      args: [], cwd: workspace,
+      env: { home: home.value, UserProfile: home.value, appdata: home.join('AppData/Roaming').value, localappdata: home.join('AppData/Local').value },
+    });
+    const invocation = vi.mocked(deps.invoke).mock.calls[0]![2];
+    expect(invocation.env).toMatchObject({
+      APPDATA: 'C:/temp/agentkeeper-123/profile/home/appdata/roaming',
+      LOCALAPPDATA: 'C:/temp/agentkeeper-123/profile/home/appdata/local',
+    });
+    for (const alias of ['home', 'UserProfile', 'appdata', 'localappdata']) {
+      expect(invocation.env).not.toHaveProperty(alias);
+    }
+  });
+});
+
+describe('native Windows result protocol', () => {
+  it('distinguishes native errors from child exits', () => {
+    expect(decodeWindowsSandboxResult(nativeResult(203, 0))).toEqual({ nativeError: 203, childExitCode: 0 });
+    expect(decodeWindowsSandboxResult(nativeResult(0, 203))).toEqual({ nativeError: 0, childExitCode: 203 });
+  });
+  it.each([Buffer.alloc(0), Buffer.alloc(16), nativeResult(999, 0), Buffer.concat([nativeResult(0, 0), Buffer.from([0])])])('rejects malformed or unknown native results', (bytes) => {
+    expect(() => decodeWindowsSandboxResult(bytes)).toThrow();
+  });
+  it('compares result magic as bytes, without ASCII masking high bits', () => {
+    const result = nativeResult(0, 0);
+    result[0] = result[0]! | 0x80;
+    expect(() => decodeWindowsSandboxResult(result)).toThrow();
+  });
+});
+
+describe('native Windows probe deadline', () => {
+  it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, 0xffff_ffff])('rejects a deadline %s that cannot bound the native wait', (timeoutMs) => {
+    expect(() => encodeWindowsSandboxRequest({
+      timeoutMs, executable: String.raw`C:\node\node.exe`, cwd: workspace.value,
+      args: [], reads: [], writes: [], denies: [],
+    })).toThrow(/deadline/i);
+  });
+  it('rejects a forged INFINITE timeout in the binary request', () => {
+    const request = encodeWindowsSandboxRequest({
+      timeoutMs: 100, executable: String.raw`C:\node\node.exe`, cwd: workspace.value,
+      args: [], reads: [], writes: [], denies: [],
+    });
+    request.writeUInt32LE(0xffff_ffff, 12);
+    expect(() => decodeWindowsSandboxRequest(request)).toThrow(/deadline/i);
   });
 });

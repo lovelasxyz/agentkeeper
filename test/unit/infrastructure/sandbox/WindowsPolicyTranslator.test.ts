@@ -114,6 +114,8 @@ describe('WindowsPolicyTranslator restricted profile', () => {
       overlayHome.join('.codex').value,
       overlayHome.join('.config/claude').value,
       overlayHome.join('tmp').value,
+      overlayHome.join('AppData', 'Roaming').value,
+      overlayHome.join('AppData', 'Local').value,
     ]);
   });
 });

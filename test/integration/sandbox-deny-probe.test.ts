@@ -207,6 +207,29 @@ describe('NodeSandboxProbe', () => {
       if (originalPath !== undefined) process.env['PATH'] = originalPath;
     }
   });
+
+  it('grants the Node install directory on Windows, never all of Program Files', async () => {
+    class CaptureRunner implements SandboxRunner {
+      readonly capabilities = new ResultRunner({ exitCode: 0, signal: null }).capabilities;
+      seenPolicy: SandboxPolicy | null = null;
+      seenCommand: SandboxCommand | null = null;
+      async isAvailable(): Promise<boolean> { return true; }
+      unenforceable(): readonly string[] { return []; }
+      async run(policy: SandboxPolicy, _context: PathContext, command: SandboxCommand): Promise<SandboxRunResult> {
+        this.seenPolicy = policy;
+        this.seenCommand = command;
+        return { exitCode: 0, signal: null };
+      }
+    }
+    const runner = new CaptureRunner();
+    await new NodeSandboxProbe().probe({ runner, platform: 'win32' });
+    const { AbsolutePath } = await import('../../src/domain/value-objects/AbsolutePath.js');
+    const runtime = AbsolutePath.of(process.execPath).parent;
+    expect(runner.seenPolicy!.reads.some((ref) => ref.path.equals(runtime))).toBe(true);
+    expect(runner.seenPolicy!.reads.some((ref) => ref.path.equals(runtime.parent))).toBe(false);
+    expect(runner.seenCommand!.deadlineMs).toBeLessThan(30_000);
+    expect(runner.seenCommand!.args[1]).toContain('timeout:');
+  });
 });
 
 describe('canary stage observability', () => {

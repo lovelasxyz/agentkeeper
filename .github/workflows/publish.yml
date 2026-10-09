@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Configure the MSVC toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Install bubblewrap
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
@@ -34,6 +37,7 @@ jobs:
             || echo "apparmor userns restriction knob not present; continuing"
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run test:windows-native
       - run: npm run lint:arch
       - run: npm run coverage
       - run: npm run clean

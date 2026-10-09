@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,8 @@ const NATIVE_ERROR_CODES = Object.freeze({
   206: 'windows.cleanup-failed',
   207: 'windows.child-wait-failed',
   208: 'windows.child-timed-out',
+  209: 'windows.result-channel-failed',
+  210: 'windows.unsafe-path',
 } as const);
 
 type NativeErrorExitCode = keyof typeof NATIVE_ERROR_CODES;
@@ -85,6 +87,7 @@ export interface WindowsSandboxRunnerDependencies {
   readonly makeTemporaryDirectory: (prefix: string) => Promise<string>;
   readonly makeDirectory: (path: string) => Promise<void>;
   readonly writeFile: (path: string, content: Buffer) => Promise<void>;
+  readonly readFile: (path: string) => Promise<Buffer>;
   readonly removeDirectory: (path: string) => Promise<void>;
   readonly invoke: (
     helper: string,
@@ -131,7 +134,7 @@ export class WindowsSandboxBackendError extends Error {
  *
  * The helper is mandatory. It creates an ephemeral AppContainer profile,
  * grants that package SID only the policy's explicit paths, starts the child
- * with zero network capabilities and no inherited handles, then assigns the
+ * with zero network capabilities and only whitelisted standard streams, then assigns the
  * suspended child to a kill-on-close Job Object. ACL entries are capabilities
  * for the AppContainer token, never a fallback boundary: any token/profile,
  * ACL, process or Job setup failure aborts before an ordinary process can run.
@@ -241,6 +244,7 @@ export class WindowsSandboxRunner implements SandboxRunner {
 
     const directory = await this.dependencies.makeTemporaryDirectory('agentkeeper-win-');
     const requestPath = join(directory, 'request.aksb');
+    const resultPath = join(directory, 'result.aksb');
     try {
       const overlayHome = AbsolutePath.of(join(directory, 'profile', 'home'));
       const plan = this.translator.plan(policy, context, overlayHome);
@@ -274,13 +278,15 @@ export class WindowsSandboxRunner implements SandboxRunner {
       try {
         result = await this.dependencies.invoke(
           this.dependencies.helperPath,
-          ['--request', requestPath],
+          ['--request', requestPath, '--result', resultPath],
           {
             cwd: command.cwd.value,
             env: {
-              ...command.env,
+              ...withoutWindowsProfileAliases(command.env),
               HOME: overlayHome.value,
               USERPROFILE: overlayHome.value,
+              APPDATA: overlayHome.join('AppData', 'Roaming').value,
+              LOCALAPPDATA: overlayHome.join('AppData', 'Local').value,
               TMPDIR: overlayHome.join('tmp').value,
               TMP: overlayHome.join('tmp').value,
               TEMP: overlayHome.join('tmp').value,
@@ -296,17 +302,38 @@ export class WindowsSandboxRunner implements SandboxRunner {
         );
       }
 
-      const nativeCode = nativeErrorCode(result.exitCode);
-      if (nativeCode !== null) {
-        throw new WindowsSandboxBackendError(nativeCode, nativeErrorMessage(nativeCode));
-      }
       if (result.signal !== null) {
         throw new WindowsSandboxBackendError(
           'windows.helper-probe-failed',
           `The native AppContainer launcher was terminated by ${result.signal}.`,
         );
       }
-      return result;
+      // A reserved process exit cannot distinguish an agent exiting 203 from
+      // ACL setup failure. The helper owns a separate result file, kept open
+      // without write/delete sharing until the entire confined tree is dead.
+      if (result.exitCode !== 0) {
+        const nativeCode = nativeErrorCode(result.exitCode);
+        throw new WindowsSandboxBackendError(
+          nativeCode ?? 'windows.helper-probe-failed',
+          nativeCode === null
+            ? `The native launcher exited with ${result.exitCode}.`
+            : nativeErrorMessage(nativeCode),
+        );
+      }
+      let report: WindowsSandboxNativeResult;
+      try {
+        report = decodeWindowsSandboxResult(await this.dependencies.readFile(resultPath));
+      } catch (error) {
+        throw new WindowsSandboxBackendError(
+          'windows.helper-probe-failed',
+          `The native launcher did not produce a valid result: ${errorMessage(error)}.`,
+        );
+      }
+      const nativeCode = nativeErrorCode(report.nativeError);
+      if (nativeCode !== null) {
+        throw new WindowsSandboxBackendError(nativeCode, nativeErrorMessage(nativeCode));
+      }
+      return { exitCode: report.childExitCode, signal: null };
     } finally {
       await this.dependencies.removeDirectory(directory);
     }
@@ -335,7 +362,29 @@ export class WindowsSandboxRunner implements SandboxRunner {
   }
 }
 
+export interface WindowsSandboxNativeResult {
+  readonly nativeError: number;
+  readonly childExitCode: number;
+}
+
+export function decodeWindowsSandboxResult(content: Buffer): WindowsSandboxNativeResult {
+  if (content.length !== 16 || !content.subarray(0, 8).equals(Buffer.from('AKSRES01', 'ascii'))) {
+    throw new Error('Invalid Windows sandbox result');
+  }
+  const nativeError = content.readUInt32LE(8);
+  if (nativeError !== 0 && nativeErrorCode(nativeError) === null) {
+    throw new Error('Unknown Windows sandbox native error');
+  }
+  return { nativeError, childExitCode: content.readUInt32LE(12) };
+}
+
+function withoutWindowsProfileAliases(env: Readonly<Record<string, string>>): Record<string, string> {
+  const owned = new Set(['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMPDIR', 'TMP', 'TEMP']);
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !owned.has(name.toUpperCase())));
+}
+
 export function encodeWindowsSandboxRequest(request: WindowsSandboxRequest): Buffer {
+  if (request.timeoutMs !== undefined) assertWindowsDeadline(request.timeoutMs);
   const writer = new BinaryWriter();
   writer.bytes(REQUEST_MAGIC);
   writer.uint32(REQUEST_VERSION);
@@ -365,6 +414,7 @@ export function decodeWindowsSandboxRequest(content: Buffer): WindowsSandboxRequ
     throw new Error('Unsupported Windows sandbox request version');
   }
   const timeoutMs = reader.uint32();
+  if (timeoutMs !== 0) assertWindowsDeadline(timeoutMs);
   const request: WindowsSandboxRequest = {
     ...(timeoutMs === 0 ? {} : { timeoutMs }),
     executable: reader.string(),
@@ -376,6 +426,13 @@ export function decodeWindowsSandboxRequest(content: Buffer): WindowsSandboxRequ
   };
   reader.assertFinished();
   return request;
+}
+
+function assertWindowsDeadline(timeoutMs: number): void {
+  // 0 is reserved for sessions, UINT32_MAX is Win32's INFINITE sentinel.
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs >= 0xffff_ffff) {
+    throw new Error('Windows sandbox deadline must be an integer between 1 and 4294967294 ms');
+  }
 }
 
 function encodeResource(ref: ResourceRef): WindowsEncodedResource {
@@ -400,6 +457,7 @@ function defaultDependencies(): WindowsSandboxRunnerDependencies {
       await mkdir(path, { recursive: true });
     },
     writeFile: async (path, content) => writeFile(path, content, { mode: 0o600 }),
+    readFile: async (path) => readFile(path),
     removeDirectory: async (path) => rm(path, { recursive: true, force: true }),
     invoke: invokeNativeHelper,
   };
@@ -501,6 +559,8 @@ function nativeErrorMessage(code: WindowsSandboxErrorCode): string {
     'windows.child-timed-out':
       'The confined child did not exit within the probe deadline; the launcher terminated its ' +
       'Job Object and reclaimed the AppContainer profile.',
+    'windows.result-channel-failed': 'The native launcher could not create or write its protected result channel.',
+    'windows.unsafe-path': 'The native launcher refused a hard-linked file, reparse point, or unsafe path before changing ACLs.',
     'windows.policy-discovery-failed':
       'The Windows policy compiler could not resolve every read-only deny rule safely.',
   };

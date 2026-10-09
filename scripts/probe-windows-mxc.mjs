@@ -52,7 +52,10 @@ try {
     ].join('\n'));
     const config = {
       version: '1.0.0', containment: 'processcontainer',
-      process: { commandLine: `"${process.execPath}" "${script}"`, cwd: workspace, timeout: 20_000 },
+      // Node otherwise resolves the entrypoint through realpathSync('C:\\').
+      // Keep the native filesystem policy intact and test its supported
+      // entrypoint option instead of granting recursive access to drive roots.
+      process: { commandLine: `"${process.execPath}" --preserve-symlinks-main "${script}"`, cwd: workspace, timeout: 20_000 },
       filesystem: { readwritePaths: [workspace], readonlyPaths: [dirname(process.execPath)], deniedPaths: [outside] },
       network: { egress: { default: 'deny' }, ingress: { default: 'deny', hostLoopback: 'deny' } },
       telemetry: { enabled: false },

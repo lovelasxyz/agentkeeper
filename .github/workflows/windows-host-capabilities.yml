@@ -1,0 +1,38 @@
+name: Windows hosted image capabilities
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/windows-host-capabilities.yml
+      - scripts/probe-windows-psec-host.ps1
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Native Windows capabilities (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-11-arm, windows-11-vs2026-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read native PSEC capabilities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = powershell.exe -NoLogo -NoProfile -NonInteractive -File ./scripts/probe-windows-psec-host.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Native capability diagnostic failed.' }
+          $report = ($output -join "`n") | ConvertFrom-Json
+          $details = $report | ConvertTo-Json -Depth 4 -Compress
+          Write-Output $details
+          $escaped = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Output "::notice title=Native PSEC host capabilities::$escaped"
+          @('### Native PSEC capabilities', '', '```json', $details, '```', '',
+            'This inventory does not launch or qualify a sandbox; the release gate remains mandatory.') |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

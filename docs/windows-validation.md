@@ -100,6 +100,18 @@ stdio works on both runners. Node 22 pipe-based descendants hang on both;
 ignored stdio fails with EPERM on the Server runner and succeeds on Windows 11.
 The required gate stays red until agent subprocess compatibility is resolved.
 
+The separate `windows-restricted-proof.yml` experiment now reaches process
+creation on both hosted runners, but its last verified run exits before the
+Node workload with `STATUS_DLL_NOT_FOUND` (`0xC0000135`). The next revision
+tests disposable, ordinary copies of the OS DLLs used by the host runtimes.
+Node and Git are inventoried separately because their architectures can differ;
+Git must answer a `cat-file --batch` request before its modules are recorded.
+System-file ACLs are not changed. Four portable regressions cover separate
+inventories, independent copies, trusted-path boundaries and DLL collisions.
+These checks validate fixture preparation, not Windows loader compatibility.
+The Windows result is pending. This experiment is not a production backend,
+does not restrict network access, and does not replace either release gate.
+
 References:
 
 - [Microsoft MXC release announcement, October 7, 2026](https://blogs.windows.com/windowsdeveloper/2026/10/07/microsoft-execution-containers-policy-driven-containment-for-ai-agents/)

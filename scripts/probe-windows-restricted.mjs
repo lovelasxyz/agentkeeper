@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { copyWindowsRuntime } from './windows-runtime-fixture.mjs';
 
 if (process.platform !== 'win32') throw new Error('The restricted-token experiment requires Windows');
 const execute = promisify(execFile);
@@ -19,6 +20,13 @@ try {
     `/Fo${join(root, 'restricted-proof.obj')}`, `/Fe${output}`],
   { cwd: root, timeout: 60_000, maxBuffer: 1024 * 1024 });
   report('Restricted token compile', compiled.stdout + compiled.stderr);
+  const nodeRoot = join(root, 'toolchain/Node');
+  await mkdir(nodeRoot, { recursive: true });
+  const node = join(nodeRoot, 'node.exe');
+  await cp(process.execPath, node);
+  const inventory = async (pid) => (await execute(output,
+    ['--runtime-modules', String(pid)], { timeout: 15_000 })).stdout.trim().split(/\r?\n/);
+  const nodeDlls = await copyWindowsRuntime(await inventory(process.pid), process.env.SystemRoot, nodeRoot);
   const workspace = join(root, 'workspace');
   const outside = join(root, 'outside.secret');
   await mkdir(workspace);
@@ -41,11 +49,54 @@ try {
       .then(() => candidate, () => undefined), Promise.resolve(undefined));
   if (!prefix) throw new Error('The installed Git runtime directory is unsupported');
   await cp(join(gitRoot, prefix, 'bin'), join(copiedGitRoot, prefix, 'bin'), { recursive: true });
-  const git = join(copiedGitRoot, 'bin/git.exe');
+  // Inventory the actual Git executable after an input/output handshake. Its
+  // ABI may differ from Node's on ARM64. The bin/git.exe wrapper can create a
+  // different process, so use the runtime executable directly in this proof.
+  const installedRuntimeGit = join(gitRoot, prefix, 'bin/git.exe');
+  const gitDatabase = join(root, 'inventory.git');
+  const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'NUL' };
+  await execute(installedRuntimeGit, ['init', '--bare', '--quiet', gitDatabase],
+    { env: gitEnv, timeout: 15_000 });
+  const gitProcess = execute(installedRuntimeGit, [`--git-dir=${gitDatabase}`, 'cat-file', '--batch'],
+    { env: gitEnv, timeout: 15_000, maxBuffer: 256 * 1024 });
+  // Attach a rejection handler immediately, even if the handshake fails first.
+  const gitExit = gitProcess.then(() => undefined, (error) => error);
+  let gitDlls;
+  try {
+    await new Promise((resolveReady, reject) => {
+      const timer = setTimeout(() => reject(new Error('Git runtime inventory handshake timed out')), 5000);
+      let received = '';
+      const onData = (chunk) => {
+        received += chunk.toString();
+        if (received.includes('agentkeeper-runtime-probe missing')) {
+          clearTimeout(timer);
+          resolveReady();
+        }
+      };
+      gitProcess.child.stdout.on('data', onData);
+      gitExit.then((error) => {
+        clearTimeout(timer);
+        reject(error ?? new Error('Git exited before the runtime inventory handshake'));
+      });
+      gitProcess.child.stdin.on('error', reject);
+      gitProcess.child.stdin.write('agentkeeper-runtime-probe\n');
+    });
+    gitDlls = await copyWindowsRuntime(await inventory(gitProcess.child.pid), process.env.SystemRoot,
+      join(copiedGitRoot, prefix, 'bin'));
+    gitProcess.child.stdin.end();
+    const error = await gitExit;
+    if (error) throw error;
+  } finally {
+    if (gitProcess.child.exitCode === null) gitProcess.child.kill();
+    await gitExit;
+  }
+  report('Restricted token runtime fixtures',
+    `Node: ${nodeDlls} OS DLL copies; Git: ${gitDlls} independently inventoried copies; system ACLs unchanged`);
+  const git = join(copiedGitRoot, prefix, 'bin/git.exe');
   // Only disposable fixtures receive low-integrity labels. Host projects and
   // toolchain integrity labels are never changed by this experiment.
   await execute('icacls.exe', [workspace, '/setintegritylevel', '(OI)(CI)L', '/T', '/Q'], { timeout: 15_000 });
-  const args = [process.execPath, git, workspace, outside, String(process.pid)];
+  const args = [node, git, workspace, outside, String(process.pid)];
   const acl = async (path) => (await execute('icacls.exe', [path], { timeout: 15_000 })).stdout;
   const before = await acl(workspace);
   // Red controls: the real workload must reject an unrestricted process, not

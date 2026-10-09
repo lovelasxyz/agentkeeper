@@ -6,6 +6,7 @@
 #include <sddl.h>
 #include <winternl.h>
 #include <bcrypt.h>
+#include <tlhelp32.h>
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "bcrypt.lib")
 
@@ -338,6 +339,33 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
 } // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
+  if (argc == 3 && wcscmp(argv[1], L"--runtime-modules") == 0) {
+    // Inventory trusted host runtimes so the proof can use ordinary copies,
+    // without granting a restricting SID to hard-linked Windows system files.
+    // Do not merge this helper's modules into the target's inventory: the
+    // target may be x64 Git while the helper and Node are native ARM64.
+    {
+      const DWORD process = wcstoul(argv[2], nullptr, 10);
+      HANDLE raw_snapshot = INVALID_HANDLE_VALUE;
+      for (int attempt = 0; attempt < 20; ++attempt) {
+        raw_snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process);
+        if (raw_snapshot != INVALID_HANDLE_VALUE || GetLastError() != ERROR_BAD_LENGTH) break;
+        Sleep(10);
+      }
+      Handle snapshot(raw_snapshot);
+      if (snapshot.get() == INVALID_HANDLE_VALUE) {
+        std::fprintf(stderr, "runtime inventory: pid=%lu win32=%lu\n", process, GetLastError());
+        return kProcessFailed;
+      }
+      MODULEENTRY32W entry{};
+      entry.dwSize = sizeof(entry);
+      if (!Module32FirstW(snapshot.get(), &entry)) return kProcessFailed;
+      do { std::wprintf(L"%ls\n", entry.szExePath); }
+      while (Module32NextW(snapshot.get(), &entry));
+      if (GetLastError() != ERROR_NO_MORE_FILES) return kProcessFailed;
+    }
+    return 0;
+  }
   if (argc != 6) return kRequestInvalid;
   Request request;
   request.executable = argv[1];

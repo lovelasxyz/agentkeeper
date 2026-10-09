@@ -7,11 +7,16 @@ on:
     paths:
       - '.github/workflows/windows-restricted-proof.yml'
       - 'scripts/probe-windows-restricted.mjs'
+      - 'scripts/windows-runtime-fixture.mjs'
       - 'test/native/windows-restricted-*'
       - 'native/windows/**'
 
 permissions:
   contents: read
+
+concurrency:
+  group: windows-restricted-proof-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   compatibility:
@@ -29,6 +34,6 @@ jobs:
           node-version: '22'
       - uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: amd64
+          arch: ${{ runner.arch == 'ARM64' && 'amd64_arm64' || 'amd64' }}
       # Uses built-ins only. Nothing enters dist or the npm package.
       - run: node scripts/probe-windows-restricted.mjs

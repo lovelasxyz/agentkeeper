@@ -31,8 +31,21 @@ DWORD ChangeObjectAcl(HANDLE object, SE_OBJECT_TYPE type, PSID sid,
   result = SetEntriesInAclW(1, &entry, old_acl, &replacement);
   if (result != ERROR_SUCCESS) return result;
   LocalAllocation replacement_owner(replacement);
-  return SetSecurityInfo(object, type, DACL_SECURITY_INFORMATION,
-      nullptr, nullptr, replacement, nullptr);
+  // SetSecurityInfo automatically walks filesystem descendants. Metadata-only
+  // ancestor grants must change exactly this object, never walk a whole drive.
+  SECURITY_DESCRIPTOR update{};
+  if (!InitializeSecurityDescriptor(&update, SECURITY_DESCRIPTOR_REVISION) ||
+      !SetSecurityDescriptorDacl(&update, TRUE, replacement, FALSE)) return GetLastError();
+  using SetNtSecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR);
+  const auto set = reinterpret_cast<SetNtSecurity>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
+                                                                 "NtSetSecurityObject"));
+  if (!set) return ERROR_PROC_NOT_FOUND;
+  const NTSTATUS status = set(object, DACL_SECURITY_INFORMATION, &update);
+  if (status < 0) {
+    std::fprintf(stderr, "restricted probe: object ACL status=0x%lx\n", static_cast<unsigned long>(status));
+    return ERROR_ACCESS_DENIED;
+  }
+  return ERROR_SUCCESS;
 }
 
 class KernelGrants {
@@ -214,8 +227,16 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
   };
   if (!BuildAclChanges(request, &grants, &denies) ||
       !ValidateAclObjects(request, grants, denies, &pins)) return finish(kUnsafePath);
-  // Node's realpath needs ancestor attributes. Never grant ancestor file data
-  // or inheritable access. The proof requires elevation for host metadata ACLs.
+  std::fprintf(stderr, "restricted probe: applying workspace/toolchain ACLs\n");
+  AclMutationGuard mutation;
+  if (!mutation.Lock() || !OpenAclObjects(&grants, true) ||
+      !ApplyAclChanges(grants, sid.get(), GRANT_ACCESS, &applied)) {
+    mutation.Unlock();
+    return finish(kAclFailed);
+  }
+  mutation.Unlock();
+  // Node's realpath needs ancestor attributes. Never grant ancestor file data,
+  // inheritable access or trigger descendant propagation at an ancestor.
   std::map<std::wstring, GrantSpec, CaseInsensitiveLess> ancestors;
   for (const auto& resource : request.reads) {
     for (std::wstring path = ParentPath(resource.path);;) {
@@ -224,19 +245,20 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
       path = ParentPath(path);
     }
   }
-  for (const auto& [unused, grant] : ancestors) { (void)unused; grants.push_back(grant); }
-  AclMutationGuard mutation;
-  if (!mutation.Lock() || !OpenAclObjects(&grants, true) ||
-      !ApplyAclChanges(grants, sid.get(), GRANT_ACCESS, &applied)) {
-    mutation.Unlock();
-    return finish(kAclFailed);
+  std::fprintf(stderr, "restricted probe: granting nonrecursive metadata\n");
+  for (const auto& [unused, grant] : ancestors) {
+    (void)unused;
+    if (!kernel.Add(CreateFileW(grant.path.c_str(), READ_CONTROL | WRITE_DAC,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr),
+        SE_FILE_OBJECT, grant.access)) return finish(kAclFailed);
   }
-  mutation.Unlock();
   if (!GrantMetadata(&kernel, request)) {
     std::fwprintf(stderr, L"restricted probe: metadata grant win32=%lu\n", GetLastError());
     return finish(kAclFailed);
   }
   std::vector<BYTE> user;
+  std::fprintf(stderr, "restricted probe: creating restricted token\n");
   Handle token(RestrictedToken(sid.get(), &user));
   if (!token.get()) return finish(kProcessFailed);
   if (!ImpersonateLoggedOnUser(token.get())) return finish(kProcessFailed);
@@ -249,6 +271,7 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
     return finish(kProcessFailed);
   }
   PrivateDesktop desktop;
+  std::fprintf(stderr, "restricted probe: creating private desktop\n");
   if (!desktop.Initialise(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid, sid.get(), profile)) {
     std::fwprintf(stderr, L"restricted probe: desktop win32=%lu\n", GetLastError());
     return finish(kProcessFailed);
@@ -267,6 +290,7 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
       &limits, sizeof(limits))) return finish(kJobFailed);
   PROCESS_INFORMATION child{};
   auto line = CommandLine(request);
+  std::fprintf(stderr, "restricted probe: launching confined Node\n");
   if (!CreateProcessAsUserW(token.get(), request.executable.c_str(), line.data(), nullptr, nullptr,
       TRUE, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
       nullptr, request.cwd.c_str(), &startup.StartupInfo, &child)) {
@@ -299,5 +323,6 @@ int wmain(int argc, wchar_t* argv[]) {
   request.writes = {{true, request.cwd}};
   if (!NormaliseRequest(&request)) return kRequestInvalid;
   std::fprintf(stdout, "restricted token proof: filesystem/stdio/Git only; network is unqualified\n");
+  std::fflush(stdout);
   return RunProof(request, wcstoul(argv[5], nullptr, 10), argv[4]);
 }

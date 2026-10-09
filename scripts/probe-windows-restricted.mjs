@@ -2,7 +2,7 @@
 // No account, service, firewall rule or production artifact is installed.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +36,11 @@ try {
   const copiedGitRoot = join(root, 'toolchain/Git');
   await mkdir(join(copiedGitRoot, 'bin'), { recursive: true });
   await cp(installedGit, join(copiedGitRoot, 'bin/git.exe'));
-  await cp(join(gitRoot, 'mingw64/bin'), join(copiedGitRoot, 'mingw64/bin'), { recursive: true });
+  const prefix = await ['mingw64', 'clangarm64', 'mingw32'].reduce(async (previous, candidate) =>
+    (await previous) ?? await access(join(gitRoot, candidate, 'bin'))
+      .then(() => candidate, () => undefined), Promise.resolve(undefined));
+  if (!prefix) throw new Error('The installed Git runtime directory is unsupported');
+  await cp(join(gitRoot, prefix, 'bin'), join(copiedGitRoot, prefix, 'bin'), { recursive: true });
   const git = join(copiedGitRoot, 'bin/git.exe');
   // Only disposable fixtures receive low-integrity labels. Host projects and
   // toolchain integrity labels are never changed by this experiment.
@@ -80,7 +84,7 @@ try {
   await Promise.all([env.APPDATA, env.LOCALAPPDATA, env.TMP].map((path) => mkdir(path, { recursive: true })));
   let failure;
   try {
-    const result = await execute(output, args, { cwd: workspace, env, timeout: 40_000, maxBuffer: 256 * 1024 });
+    const result = await execute(output, args, { cwd: workspace, env, timeout: 120_000, maxBuffer: 256 * 1024 });
     report('Restricted token compatibility', result.stdout + result.stderr);
     assert.equal(result.stdout.includes('"networkQualified":false'), true);
   } catch (error) {

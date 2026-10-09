@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.3
+## Unreleased
 
 ### Windows candidate hardening (not yet shipped)
 

@@ -79,20 +79,17 @@ jobs:
         if: runner.os != 'Windows'
         run: npm run test:sandbox
 
-      # Windows AppContainer has never passed its deny canary. The suite runs
-      # advisory so the failure — with the instrumented canary's last stage —
-      # is observed on every push, and becomes a gate the day it passes.
-      # The helper is never shipped meanwhile: verify-package refuses it.
-      - name: Sandbox isolation tests (Windows, not yet a release gate)
+      # Qualification failures must fail CI. Passing this suite alone does not
+      # ship the candidate: verify-package still refuses the native helper.
+      - name: Sandbox isolation tests (Windows qualification gate)
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           $output = npm run test:sandbox 2>&1 | Out-String
           Write-Output $output
           $tail = ($output -split "`n" | Select-Object -Last 40) -join "`n"
           @(
-            '### Windows sandbox suite — reported, not gating',
+            '### Windows sandbox qualification',
             '',
             '```',
             $tail.TrimEnd(),

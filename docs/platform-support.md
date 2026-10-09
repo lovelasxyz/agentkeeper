@@ -85,15 +85,16 @@ Windows without layer 1.
 
 **How Windows comes back.** The backend lives in the tree again, is compiled
 on every CI run, and its sandbox suite runs on the GitHub-hosted Windows
-runner — real hardware — in advisory mode. The canary is instrumented: it
+runner as a required qualification gate. The canary is instrumented: it
 writes the furthest stage it reached (`boot` → `allowed-read` →
 `deny-checked` → `child-boot` → `child-returned`) into the workspace, so a
 hang is *observed* in CI logs rather than guessed at. The helper is still not
 shipped: the package gate refuses `dist/native/` until the suite passes on
-Windows 10 and 11, x64 and arm64, and only then becomes a release gate like
-the other two. With the loopback exemption noted below to retire denial-only
-egress: `CheckNetIsolation LoopbackExempt` scoped to the container SID,
-granted with elevation during `activate`.
+Windows 10 and 11, x64 and arm64, and the remaining requirements in
+[Windows qualification](windows-validation.md) are met. A general
+`CheckNetIsolation LoopbackExempt` exemption is not a destination allowlist:
+it also exposes unrelated host services, so it cannot be used as the broker
+boundary.
 
 ## Degradation is always named
 

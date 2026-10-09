@@ -138,6 +138,22 @@ describeOnWindows('isolation actually isolates (Windows / AppContainer)', () => 
     expect((await runScript(`process.exit(${code})`)).exitCode).toBe(code);
   });
 
+  it.each(['inherit', 'pipe', 'ignore'] as const)('confines descendants with %s standard streams', async (stdio) => {
+    const outside = join(root, `descendant-${stdio}.secret`);
+    await writeFile(outside, 'secret');
+    try {
+      const childScript = `try{require('node:fs').readFileSync(${JSON.stringify(outside)});process.exit(42)}catch{process.exit(0)}`;
+      const result = await runScript([
+        "const cp=require('node:child_process');",
+        `const child=cp.spawnSync(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:${JSON.stringify(stdio)},timeout:5000,killSignal:'SIGKILL'});`,
+        "if(child.status!==0){console.error('descendant diagnostic',JSON.stringify({status:child.status,signal:child.signal,error:child.error?.code,stderr:child.stderr?.toString().slice(0,1000)}));process.exit(44)}",
+      ].join(''));
+      expect(result.exitCode).toBe(0);
+    } finally {
+      await rm(outside, { force: true });
+    }
+  });
+
   it('reclaims a hung child through the helper deadline and can immediately run again', async () => {
     await expect(runScript('setInterval(()=>{},1000)', 500)).rejects.toMatchObject({
       code: 'windows.child-timed-out',
@@ -244,7 +260,7 @@ async function readDacl(path: string): Promise<string> {
   const { stdout } = await executeFile(
     join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-      "$ErrorActionPreference='Stop'; (Get-Acl -LiteralPath $env:AGENTKEEPER_TEST_ACL_PATH).GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)"],
+      "$ErrorActionPreference='Stop'; $p=$env:AGENTKEEPER_TEST_ACL_PATH; $acl=if([System.IO.Directory]::Exists($p)){[System.IO.Directory]::GetAccessControl($p)}else{[System.IO.File]::GetAccessControl($p)}; $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)"],
     { env: { ...process.env, AGENTKEEPER_TEST_ACL_PATH: path }, timeout: 10_000 },
   );
   return stdout.trim();

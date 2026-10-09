@@ -233,6 +233,22 @@ describe('NodeSandboxProbe', () => {
 });
 
 describe('canary stage observability', () => {
+  it('reports child-launch diagnostics when the runner returns protocol exit 44', async () => {
+    class ChildFailedRunner extends NoopRunner {
+      override async run(_policy: SandboxPolicy, context: PathContext): Promise<SandboxRunResult> {
+        const { writeFile } = await import('node:fs/promises');
+        await writeFile(context.workspace.join('.canary-stage').value,
+          'child-returned status=null signal=null error=EACCES');
+        return { exitCode: 44, signal: null };
+      }
+    }
+    const result = await new NodeSandboxProbe().probe({
+      runner: new ChildFailedRunner(), platform: hostPlatform(),
+    });
+    expect(result.code).toBe('child-probe-failed');
+    expect(result.detail).toContain('error=EACCES');
+  });
+
   it('maps a helper-side child timeout to canary-timed-out and quotes the last stage', async () => {
     class TimingOutRunner extends NoopRunner {
       override async run(

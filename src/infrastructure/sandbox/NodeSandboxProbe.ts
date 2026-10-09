@@ -92,7 +92,12 @@ export class NodeSandboxProbe implements SandboxProbe {
         // workspace, and the next cleanup fails instead of the probe failing.
         abandon.abort();
       });
-      return interpret(result);
+      const interpreted = interpret(result);
+      if (!interpreted.passed && interpreted.code === 'child-probe-failed') {
+        const stage = await readCanaryStage(stagePath);
+        if (stage !== null) return { ...interpreted, detail: `last canary stage: ${stage}` };
+      }
+      return interpreted;
     } catch (error) {
       // A canary that never returns is not a boundary that works: `doctor`
       // must say the protection is unverified instead of hanging forever. The
@@ -198,7 +203,7 @@ function canaryScript(allowedPath: string, deniedPath: string, stagePath: string
     // platform whose boundary was fine.
     `const childScript = ${JSON.stringify(childCanarySource(stagePath))};`,
     "const child = cp.spawnSync(process.execPath, ['-e', childScript, denied], { stdio: 'ignore', timeout: 5000, killSignal: 'SIGKILL' });",
-    "stage('child-returned');",
+    "stage('child-returned status=' + child.status + ' signal=' + child.signal + ' error=' + (child.error?.code ?? 'none'));",
     `if (child.status === ${EXIT_DENY_CANARY_READABLE}) process.exit(${EXIT_CHILD_DENY_CANARY_READABLE});`,
     `if (child.status !== 0) process.exit(${EXIT_CHILD_PROBE_FAILED});`,
     'process.exit(0);',

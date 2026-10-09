@@ -6,7 +6,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, parse, resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { assessWindowsPsecHost } from '../src/infrastructure/sandbox/WindowsPsecSupport.ts';
 import { buildWindowsPsecProbe } from './build-windows-psec-probe.mjs';
 
@@ -55,6 +56,13 @@ try {
     const git = (await execute('where.exe', ['git'])).stdout.trim().split(/\r?\n/)[0];
     if (!git) throw new Error('Git is required for Windows toolchain qualification');
     const nativeReport = JSON.parse((await execute(compat, ['--host'], { timeout: 15_000 })).stdout);
+    const powershell = await execute('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File',
+      fileURLToPath(new URL('./probe-windows-psec-host.ps1', import.meta.url))], { timeout: 30_000 });
+    const independentReport = JSON.parse(powershell.stdout);
+    if (!isDeepStrictEqual(nativeReport, independentReport)) {
+      report('Windows PSEC report disagreement', JSON.stringify({ nativeReport, independentReport }));
+      throw new Error('Independent C++ and PowerShell native reports disagree');
+    }
     const prerequisites = assessWindowsPsecHost(nativeReport);
     report('Windows PSEC native prerequisites', JSON.stringify({ nativeReport, prerequisites }));
     const pipePath = String.raw`\\.\pipe\agentkeeper-mxc-${randomUUID()}`;

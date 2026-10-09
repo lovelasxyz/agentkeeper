@@ -54,6 +54,19 @@ that qualifies for PSEC 1.1, the proof requests enumeration-only drive metadata
 and tests ordinary Node entrypoint/module resolution without symlink flags.
 Passing host prerequisites alone still does not qualify the product.
 
+The observed GitHub Windows 11 host is build **26200.9457**, with PSEC **1.0**
+and support mask **`0x3`**. It cannot qualify the selected 1.1 contract. To
+check another Windows machine without Node, MSVC, installation or ACL changes:
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\probe-windows-psec-host.ps1
+```
+
+This reports native API availability, contract version and capabilities as
+JSON. The full qualification cross-checks this report against independently
+compiled C++ Win32 calls before using its prerequisites. A supported report is
+only the prerequisite to run the actual sandbox tests.
+
 Actual legacy tests now show working direct isolation, workspace edits,
 concurrency, hardlink/junction refusals and ACL rollback. Inherited descendant
 stdio works on both runners. Node 22 pipe-based descendants hang on both;

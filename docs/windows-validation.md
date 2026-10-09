@@ -115,7 +115,15 @@ passed DLL loading on x64 and reached a later Node startup failure:
 as its global config path. The next revision uses an ordinary empty config
 file, with a real Git regression test, and reports restricted-token read access
 to Winsock registry keys and system DLLs. It does not broaden those permissions
-or claim the Winsock failure is fixed. This experiment is not a production backend,
+or claim the Winsock failure is fixed. Run
+[38001147479](https://github.com/lovelasxyz/agentkeeper/actions/runs/38001147479)
+confirmed the Git fix on ARM64 and the same Winsock failure on both runners;
+the restricted token cannot read the protocol catalog. The next experiment
+temporarily grants its unique SID `KEY_READ` on the Winsock2 Parameters subtree
+only. It checks that registry writes remain denied and compares all catalog
+ACLs before and after execution, including a failed child. This requires host
+permission to adjust those registry ACLs and is not a standard-user installation
+design. System DLL access remains unchanged. This experiment is not a production backend,
 does not restrict network access, and does not replace either release gate.
 
 References:

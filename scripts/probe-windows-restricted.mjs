@@ -99,6 +99,14 @@ try {
   const args = [node, git, workspace, outside, String(process.pid)];
   const acl = async (path) => (await execute('icacls.exe', [path], { timeout: 15_000 })).stdout;
   const before = await acl(workspace);
+  const catalogAcl = async () => (await execute('powershell.exe',
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+      "$ErrorActionPreference = 'Stop'; " +
+      "$root = 'Registry::HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters'; " +
+      "@((Get-Item -LiteralPath $root); (Get-ChildItem -LiteralPath $root -Recurse)) | " +
+      "Sort-Object Name | ForEach-Object { $_.Name + ' ' + (Get-Acl -LiteralPath $_.PSPath).Sddl }"],
+    { timeout: 20_000, maxBuffer: 1024 * 1024 })).stdout;
+  const catalogBefore = await catalogAcl();
   // Red controls: the real workload must reject an unrestricted process, not
   // pass because its canary or subprocess assertions accidentally do nothing.
   const hostControl = await execute(process.execPath,
@@ -145,6 +153,7 @@ try {
   }
   assert.equal(await readFile(outside, 'utf8'), 'restricted-token outside canary');
   assert.equal(await acl(workspace), before, 'workspace ACL must be restored after the proof');
+  assert.equal(await catalogAcl(), catalogBefore, 'Winsock catalog ACLs must be restored after the proof');
   if (failure) throw failure;
   report('Restricted token scope', 'Compatibility proof only: network, service lifecycle and production integration remain unqualified.');
 } catch (error) {

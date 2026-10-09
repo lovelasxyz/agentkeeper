@@ -12,7 +12,7 @@
 
 namespace {
 struct KernelGrant {
-  std::shared_ptr<Handle> object;
+  std::shared_ptr<void> object;
   SE_OBJECT_TYPE type;
 };
 
@@ -39,6 +39,9 @@ DWORD ChangeObjectAcl(HANDLE object, SE_OBJECT_TYPE type, PSID sid,
   SECURITY_DESCRIPTOR update{};
   if (!InitializeSecurityDescriptor(&update, SECURITY_DESCRIPTOR_REVISION) ||
       !SetSecurityDescriptorDacl(&update, TRUE, replacement, FALSE)) return GetLastError();
+  if (type == SE_REGISTRY_KEY) {
+    return RegSetKeySecurity(static_cast<HKEY>(object), DACL_SECURITY_INFORMATION, &update);
+  }
   using SetNtSecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR);
   const auto set = reinterpret_cast<SetNtSecurity>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
                                                                  "NtSetSecurityObject"));
@@ -57,7 +60,10 @@ class KernelGrants {
   ~KernelGrants() { if (!closed_) Close(); }
   bool Add(HANDLE object, SE_OBJECT_TYPE type, DWORD rights) {
     if (object == nullptr || object == INVALID_HANDLE_VALUE) return false;
-    auto owner = std::make_shared<Handle>(object);
+    std::shared_ptr<void> owner(object, [type](void* handle) {
+      if (type == SE_REGISTRY_KEY) RegCloseKey(static_cast<HKEY>(handle));
+      else CloseHandle(handle);
+    });
     grants_.push_back({owner, type});
     const DWORD result = ChangeObjectAcl(object, type, sid_, rights, GRANT_ACCESS);
     if (result != ERROR_SUCCESS) { SetLastError(result); return false; }
@@ -66,7 +72,7 @@ class KernelGrants {
   bool Close() {
     bool success = true;
     for (auto it = grants_.rbegin(); it != grants_.rend(); ++it) {
-      if (ChangeObjectAcl(it->object->get(), it->type, sid_, 0, REVOKE_ACCESS)
+      if (ChangeObjectAcl(it->object.get(), it->type, sid_, 0, REVOKE_ACCESS)
           != ERROR_SUCCESS) success = false;
     }
     grants_.clear();
@@ -78,6 +84,47 @@ class KernelGrants {
   bool closed_ = false;
   std::vector<KernelGrant> grants_;
 };
+
+bool GrantWinsockCatalog(KernelGrants* grants) {
+  // Developer proof only. Node initializes Winsock before executing JS. Full
+  // restricting tokens need an explicit read grant for the protocol catalog.
+  // Do not grant writes, HKLM generally, or TCP/IP configuration. All opened
+  // keys are retained for SID-specific rollback through KernelGrants.
+  std::vector<std::wstring> pending{
+      L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters"};
+  for (std::size_t index = 0; index < pending.size(); ++index) {
+    if (pending.size() > 512) { SetLastError(ERROR_BUFFER_OVERFLOW); return false; }
+    const std::wstring path = pending[index];
+    HKEY key = nullptr;
+    LSTATUS status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), REG_OPTION_OPEN_LINK,
+                                  KEY_READ | WRITE_DAC, &key);
+    if (status != ERROR_SUCCESS) { SetLastError(status); return false; }
+    DWORD type = 0;
+    status = RegQueryValueExW(key, L"SymbolicLinkValue", nullptr, &type, nullptr, nullptr);
+    if (status == ERROR_SUCCESS && type == REG_LINK) {
+      RegCloseKey(key);
+      SetLastError(ERROR_REPARSE_TAG_INVALID);
+      return false;
+    }
+    if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND) {
+      RegCloseKey(key);
+      SetLastError(status);
+      return false;
+    }
+    if (!grants->Add(key, SE_REGISTRY_KEY, KEY_READ)) return false;
+    for (DWORD child = 0;; ++child) {
+      wchar_t name[256]{};
+      DWORD length = 256;
+      status = RegEnumKeyExW(key, child, name, &length, nullptr, nullptr, nullptr, nullptr);
+      if (status == ERROR_NO_MORE_ITEMS) break;
+      if (status != ERROR_SUCCESS) { SetLastError(status); return false; }
+      pending.push_back(path + L"\\" + name);
+      if (pending.size() > 512) { SetLastError(ERROR_BUFFER_OVERFLOW); return false; }
+    }
+  }
+  std::fprintf(stderr, "restricted probe: granted KEY_READ to %zu Winsock catalog keys\n", pending.size());
+  return true;
+}
 
 using OpenNtObject = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
 HANDLE OpenNamespaceObject(const wchar_t* path, bool directory) {
@@ -309,6 +356,10 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
     std::fwprintf(stderr, L"restricted probe: metadata grant win32=%lu\n", GetLastError());
     return finish(kAclFailed);
   }
+  if (!GrantWinsockCatalog(&kernel)) {
+    std::fprintf(stderr, "restricted probe: Winsock catalog grant win32=%lu\n", GetLastError());
+    return finish(kAclFailed);
+  }
   std::vector<BYTE> user;
   std::fprintf(stderr, "restricted probe: creating restricted token\n");
   Handle token(RestrictedToken(sid.get(), &user));
@@ -318,8 +369,13 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
   Handle canary_control(CreateFileW(outside.c_str(), WRITE_DAC,
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
   DiagnoseRuntimeAccess();
+  HKEY catalog = nullptr;
+  const LSTATUS catalog_write = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+      L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters", 0, KEY_SET_VALUE, &catalog);
+  if (catalog != nullptr) RegCloseKey(catalog);
   const bool reverted = RevertToSelf() != FALSE;
-  if (!reverted || parent_control.get() || canary_control.get() != INVALID_HANDLE_VALUE) {
+  if (!reverted || parent_control.get() || canary_control.get() != INVALID_HANDLE_VALUE ||
+      catalog_write != ERROR_ACCESS_DENIED) {
     std::fprintf(stderr, "restricted probe: host control was not denied\n");
     return finish(kProcessFailed);
   }

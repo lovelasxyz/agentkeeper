@@ -58,9 +58,15 @@ jobs:
         if: runner.os != 'Windows'
         run: node test/e2e/bench.mjs dist/cli.js --enforce
 
+  # A tag must exercise the same native boundary as main before publishing.
+  # The unreleased Windows candidate keeps this gate red until qualified.
+  windows-psec:
+    name: Native PSEC qualification (windows-11-arm)
+    uses: ./.github/workflows/windows-psec.yml
+
   publish:
     name: npm trusted publish
-    needs: [verify]
+    needs: [verify, windows-psec]
     runs-on: ubuntu-latest
     permissions:
       contents: read

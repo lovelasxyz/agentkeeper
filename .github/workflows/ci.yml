@@ -138,21 +138,7 @@ jobs:
 
   windows-psec:
     name: Native PSEC qualification (windows-11-arm)
-    runs-on: windows-11-arm
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      # This proof uses only Node built-ins and the integrity-pinned native
-      # executor. It can run independently of the project's dependency install
-      # and the legacy launcher, while remaining a mandatory packaging gate.
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          # Git on this ARM64 host is x64 too. Exercise its actual Win32 ABI.
-          arch: amd64
-      - run: npm run probe:windows-mxc
+    uses: ./.github/workflows/windows-psec.yml
 
   package:
     name: package contents

@@ -64,7 +64,10 @@ nor a shipped agentkeeper backend; the production candidate needs its own
 pre-launch alias refusal tests before these raw OS tests can qualify a release.
 
 The separate `windows-psec` CI job runs these native tests independently of the
-dependency install and legacy launcher. Packaging depends on it. On a host
+dependency install and legacy launcher. CI packaging and npm publication both
+depend on the same reusable `.github/workflows/windows-psec.yml` gate, at the
+caller's commit. A release tag cannot bypass a failed native qualification.
+On a host
 that qualifies for PSEC 1.1, the proof requests enumeration-only drive metadata
 and tests ordinary Node entrypoint/module resolution without symlink flags.
 Passing host prerequisites alone still does not qualify the product.

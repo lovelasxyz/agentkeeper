@@ -1,0 +1,25 @@
+name: Native Windows PSEC qualification
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Native PSEC qualification (windows-11-arm)
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Node built-ins and the integrity-pinned native executor keep this
+      # proof independent of dependency install and the legacy launcher.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          # Match the Win32 ABI used by Git on the ARM64 host.
+          arch: amd64
+      - run: npm run probe:windows-mxc

@@ -50,7 +50,7 @@ describe('build and CI portability', () => {
     // tested: the pin drifted out of `npm@latest`'s supported range and the
     // publish job died before it reached a single check.
     const versions = new Set(
-      ['.github/workflows/ci.yml', '.github/workflows/publish.yml'].flatMap((relative) =>
+      ['.github/workflows/ci.yml', '.github/workflows/publish.yml', '.github/workflows/windows-psec.yml'].flatMap((relative) =>
         [...readFileSync(join(repository, relative), 'utf8').matchAll(/node-version: '([^']+)'/g)].map(
           (match) => match[1] as string,
         ),
@@ -64,7 +64,7 @@ describe('build and CI portability', () => {
     // A stray second colon makes the key `workflow_dispatch:` rather than the
     // event, and GitHub then rejects the whole file: the run reports failure
     // with zero jobs, which reads like a broken build rather than bad YAML.
-    for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
+    for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml', '.github/workflows/windows-psec.yml']) {
       const workflow = readFileSync(join(repository, relative), 'utf8');
       expect(workflow, `${relative} has a malformed key`).not.toMatch(/^\s*[\w-]+::/m);
     }
@@ -113,6 +113,20 @@ describe('build and CI portability', () => {
     expect(readFileSync(join(repository, 'scripts/verify-tarball.mjs'), 'utf8')).toMatch(
       /'--ignore-scripts'/,
     );
+  });
+
+  it('requires the same native Windows qualification before CI packaging and npm publication', () => {
+    for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
+      const workflow = readFileSync(join(repository, relative), 'utf8');
+      expect(workflow, relative).toMatch(/windows-psec:\s+name:.*\n\s+uses: \.\/\.github\/workflows\/windows-psec\.yml/);
+      expect(workflow, relative).toMatch(/\n {2}(?:publish|package):\n {4}name:.*\n {4}needs: \[[^\]\n]*\bwindows-psec\b[^\]\n]*\]/);
+      expect(workflow, relative).not.toMatch(/if:.*always\(\)/);
+    }
+    const qualification = readFileSync(join(repository, '.github/workflows/windows-psec.yml'), 'utf8');
+    expect(qualification).toMatch(/^\s{2}workflow_call:\s*$/m);
+    expect(qualification).toContain('runs-on: windows-11-arm');
+    expect(qualification).toContain('npm run probe:windows-mxc');
+    expect(qualification).not.toMatch(/continue-on-error|always\(\)/);
   });
 
   it('proves the assembled tarball itself, not npm output', () => {

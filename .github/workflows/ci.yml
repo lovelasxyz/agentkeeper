@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest, windows-11-arm]
+        os: [macos-latest, ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -32,9 +32,8 @@ jobs:
           node-version: '22'
           cache: npm
 
-      # The Windows helper is built on every run so the sandbox suite below
-      # exercises the real boundary on real hardware. It is *not* shipped:
-      # verify-package refuses dist/native until the suite gates.
+      # Windows retains portability/detection tests; sandbox development is frozen.
+      # MSVC here only compiles the portable path-contract test.
       - name: Configure the MSVC toolchain
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -73,43 +72,12 @@ jobs:
       - run: npm run clean
       - run: npm run build
 
-      # After `clean` and `build`, so the helper survives into test:sandbox.
-      - name: Build the Windows AppContainer helper (runner architecture, not shipped)
-        if: runner.os == 'Windows'
-        run: npm run build:windows-sandbox
-
       # The tests that decide whether the product works: a real process under
       # the real mechanism, checking that forbidden things actually fail.
       # macOS and Linux are the declared full-support platforms.
       - name: Sandbox isolation tests
         if: runner.os != 'Windows'
         run: npm run test:sandbox
-
-      # Qualification failures must fail CI. Passing this suite alone does not
-      # ship the candidate: verify-package still refuses the native helper.
-      - name: Sandbox isolation tests (Windows qualification gate)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $output = npm run test:sandbox 2>&1 | Out-String
-          $suiteExit = $LASTEXITCODE
-          Write-Output $output
-          $tail = ($output -split "`n" | Select-Object -Last 40) -join "`n"
-          @(
-            '### Windows sandbox qualification',
-            '',
-            '```',
-            $tail.TrimEnd(),
-            '```'
-          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          if ($suiteExit -ne 0) {
-            # Annotations are available through the public Checks API even
-            # when downloading the job log requires an authenticated session.
-            $details = (($output -split "`n" | Select-Object -Last 160) -join "`n")
-            $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::error title=Windows sandbox qualification::$details"
-            exit $suiteExit
-          }
 
       - name: End-to-end install lifecycle
         if: runner.os != 'Windows'
@@ -127,26 +95,9 @@ jobs:
       - name: Self-scan
         run: node dist/cli.js scan .
 
-  windows-native-arm64:
-    name: Windows native helper (ARM64 compile, not shipped)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64_arm64
-      - run: node scripts/build-windows-sandbox.mjs arm64
-
-  windows-psec:
-    name: Native PSEC qualification (windows-11-arm)
-    uses: ./.github/workflows/windows-psec.yml
-
   package:
     name: package contents
-    needs: [verify, windows-native-arm64, windows-psec]
+    needs: [verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,5 +1,30 @@
 # Windows candidate: implementation and qualification
 
+## Frozen — October 10, 2026
+
+Windows sandbox development is frozen at the maintainer's request. No native
+Windows backend ships; protected launches remain unavailable and report
+`UNPROTECTED`. This is a scope decision, not successful Windows qualification.
+
+Automatic AppContainer qualification and ARM64 helper builds have been removed
+from CI. PSEC, restricted-token and host-capability workflows are manual only
+and no longer block packaging or publication. Ordinary Windows portability and
+detection tests remain in CI. Package checks still refuse `dist/native`.
+
+Source code and tests are retained. AppContainer can be investigated explicitly
+with `npm run verify:windows`; the other experiments have manual workflows.
+Do not run the restricted-token experiment on a user's machine: its last ARM64
+run still failed before JS on OpenSSL configuration access, and registry
+rollback lost the original DACL control flag (`D:AI` became `D:`).
+
+Resuming Windows support requires an explicit project decision and complete
+qualification before restoring any release claim or shipping native artifacts.
+The remainder of this document records the **pre-freeze investigation**;
+references below to mandatory Windows gates and a selected architecture are
+historical, not the current release policy.
+
+## Investigation history
+
 The native AppContainer launcher remains an **unreleased candidate**. These
 changes harden it; they do not establish Windows production support. The
 package still refuses `dist/native`, and Windows installations still report

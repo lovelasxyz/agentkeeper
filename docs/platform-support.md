@@ -63,38 +63,24 @@ sandbox conformance suite proves it against real processes.
 **`sandbox-exec` is deprecated by Apple.** It is still the built-in mechanism
 and still works. The backend is replaceable without touching the policy domain.
 
-## Windows — no backend shipped
+## Windows — sandbox development frozen
 
-The current candidate has additional path/handle, result-channel and lifecycle
-hardening with regression tests. See [Windows qualification](windows-validation.md)
-for the implementation, a mandatory local Windows verification command and
-the remaining egress, agent-compatibility and crash-recovery requirements.
-Portable tests do not qualify this backend for shipping.
+Windows sandbox development was frozen on October 10, 2026. No native backend
+ships: the package gate rejects `dist/native/`, `doctor` reports `UNPROTECTED`
+with `platform.windows-runner-unavailable`, and protected launches refuse to
+start. Freezing development does not establish Windows isolation.
 
-The AppContainer backend was removed from the package: its confined child
-started and never exited, the deny canary timed out on every run, and the
-cause could not be found without a Windows machine with a debugger. Shipping
-a backend that has never passed its own canary would claim a boundary that
-was never observed to hold — so the package refuses to ship any native helper
-at all (the package gate rejects `dist/native/`), and Windows reports
-`UNPROTECTED` with reason code `platform.windows-runner-unavailable`.
+The file-watch detection layer, PreToolUse rules and Git hook integration remain
+available. Ordinary Windows portability and detection tests still run in CI.
 
-The sandbox decision is separate from the rest of the product: the file-watch
-detection layer, the PreToolUse hook rules and the Git hook chain all work on
-Windows without layer 1.
-
-**How Windows comes back.** The backend lives in the tree again, is compiled
-on every CI run, and its sandbox suite runs on the GitHub-hosted Windows
-runner as a required qualification gate. The canary is instrumented: it
-writes the furthest stage it reached (`boot` → `allowed-read` →
-`deny-checked` → `child-boot` → `child-returned`) into the workspace, so a
-hang is *observed* in CI logs rather than guessed at. The helper is still not
-shipped: the package gate refuses `dist/native/` until the suite passes on
-supported Windows 11 builds, x64 and arm64, and the remaining requirements in
-[Windows qualification](windows-validation.md) are met. A general
-`CheckNetIsolation LoopbackExempt` exemption is not a destination allowlist:
-it also exposes unrelated host services, so it cannot be used as the broker
-boundary.
+Experimental AppContainer, PSEC and restricted-token sources and tests are
+retained for future investigation. Their qualification is no longer automatic
+or a prerequisite for macOS/Linux releases. The PSEC, restricted-token and host
+inventory workflows require an explicit manual run. See
+[the frozen Windows investigation](windows-validation.md) for known failures,
+including incomplete registry ACL restoration in the restricted-token proof.
+Native artifacts remain excluded until a future backend has completed real
+isolation, toolchain, network and lifecycle qualification.
 
 ## Degradation is always named
 

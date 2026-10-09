@@ -73,24 +73,22 @@ describe('build and CI portability', () => {
     );
   });
 
-  it('requires Windows qualification in CI while keeping the native candidate out of releases', () => {
-    // Qualification failures fail CI even while the candidate is unreleased.
+  it('keeps Windows portability checks without running the frozen sandbox candidates', () => {
     const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8');
 
     expect(workflow).toMatch(/windows-latest/);
     expect(workflow).toMatch(/msvc-dev-cmd/);
-    expect(workflow).toMatch(/npm run build:windows-sandbox/);
+    expect(workflow).toContain('os: [macos-latest, ubuntu-latest, windows-latest]');
+    expect(workflow).toContain('npm run test:windows-native');
+    expect(workflow).not.toMatch(/build:windows-sandbox|windows-native-arm64|windows-psec|Windows qualification gate/);
 
     // Platform failures must not be converted into a successful check.
     for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
       const text = readFileSync(join(repository, relative), 'utf8');
       expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(0);
     }
-    expect(workflow).toMatch(
-      /Sandbox isolation tests \(Windows qualification gate\)\s+if: runner\.os == 'Windows'/,
-    );
-    expect(workflow).toMatch(/windows-psec:\s+name:.*\(windows-11-arm\)/);
-    expect(workflow).toContain('needs: [verify, windows-native-arm64, windows-psec]');
+    expect(workflow).toMatch(/Sandbox isolation tests\s+if: runner\.os != 'Windows'/);
+    expect(workflow).toContain('needs: [verify]');
   });
 
   it('refuses to package a native Windows backend', () => {
@@ -115,18 +113,19 @@ describe('build and CI portability', () => {
     );
   });
 
-  it('requires the same native Windows qualification before CI packaging and npm publication', () => {
+  it('keeps frozen Windows experiments manual and outside release dependencies', () => {
     for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
       const workflow = readFileSync(join(repository, relative), 'utf8');
-      expect(workflow, relative).toMatch(/windows-psec:\s+name:.*\n\s+uses: \.\/\.github\/workflows\/windows-psec\.yml/);
-      expect(workflow, relative).toMatch(/\n {2}(?:publish|package):\n {4}name:.*\n {4}needs: \[[^\]\n]*\bwindows-psec\b[^\]\n]*\]/);
+      expect(workflow, relative).not.toContain('windows-psec');
+      expect(workflow, relative).toMatch(/\n {2}(?:publish|package):\n {4}name:.*\n {4}needs: \[verify\]/);
       expect(workflow, relative).not.toMatch(/if:.*always\(\)/);
     }
-    const qualification = readFileSync(join(repository, '.github/workflows/windows-psec.yml'), 'utf8');
-    expect(qualification).toMatch(/^\s{2}workflow_call:\s*$/m);
-    expect(qualification).toContain('runs-on: windows-11-arm');
-    expect(qualification).toContain('npm run probe:windows-mxc');
-    expect(qualification).not.toMatch(/continue-on-error|always\(\)/);
+    for (const name of ['windows-psec', 'windows-restricted-proof', 'windows-host-capabilities']) {
+      const workflow = readFileSync(join(repository, `.github/workflows/${name}.yml`), 'utf8');
+      expect(workflow, name).toMatch(/^  workflow_dispatch:\s*$/m);
+      expect(workflow, name).not.toMatch(/^  (push|pull_request|schedule|workflow_call|workflow_run):/m);
+      expect(workflow, name).not.toMatch(/continue-on-error|always\(\)/);
+    }
   });
 
   it('proves the assembled tarball itself, not npm output', () => {

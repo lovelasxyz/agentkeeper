@@ -1,15 +1,8 @@
-name: Windows restricted-token compatibility experiment
+name: Frozen Windows restricted-token compatibility experiment
 
+# Frozen at the maintainer's request. Explicit manual investigation only.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/windows-restricted-proof.yml'
-      - 'scripts/probe-windows-restricted.mjs'
-      - 'scripts/windows-runtime-fixture.mjs'
-      - 'test/native/windows-restricted-*'
-      - 'native/windows/**'
 
 permissions:
   contents: read

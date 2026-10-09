@@ -1,10 +1,11 @@
 // Developer-only comparison with Microsoft's published native executor.
 // Nothing is installed into node_modules or assembled into the npm package.
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 if (process.platform !== 'win32') throw new Error('MXC host qualification requires Windows');
@@ -14,6 +15,7 @@ if (npm === undefined) throw new Error('Run through npm run probe:windows-mxc');
 const execute = promisify(execFile);
 const integrity = 'sha512-7aVR+GHVKveIknZmUtkAEFwUBp61qgEmhJRe1ZyKHJ274yWlKWB/ZfDP/u/whfmDyck0wRNKZN49atlF+SZt2Q==';
 const root = await mkdtemp(join(tmpdir(), 'agentkeeper-mxc-probe-'));
+const servers = [];
 try {
   const packed = await execute(process.execPath, [npm, 'pack', '@microsoft/mxc-sdk@1.0.0',
     '--ignore-scripts', '--json', '--pack-destination', root, '--cache', join(root, 'cache')],
@@ -38,48 +40,72 @@ try {
     const outside = join(root, 'outside.secret');
     await writeFile(outside, 'must not be readable');
     const script = join(workspace, 'qualification.cjs');
-    await writeFile(script, [
-      "const fs=require('node:fs'),cp=require('node:child_process');",
-      `const outside=${JSON.stringify(outside)};`,
-      "try{fs.readFileSync(outside);process.exit(42)}catch{}",
-      "fs.writeFileSync('inside.txt','ok');",
-      "for(const stdio of ['inherit','ignore','pipe']){",
-      " const code=\"try{require('node:fs').readFileSync(process.argv[1]);process.exit(42)}catch{process.exit(0)}\";",
-      " const child=cp.spawnSync(process.execPath,['-e',code,outside],{stdio,timeout:5000,killSignal:'SIGKILL'});",
-      " console.log(JSON.stringify({stdio,status:child.status,signal:child.signal,error:child.error?.code}));",
-      " if(child.status!==0)process.exit(44);",
-      "}",
-    ].join('\n'));
+    await writeFile(script, await readFile(new URL('../test/native/windows-psec-workload.cjs', import.meta.url)));
+    await writeFile(join(workspace, 'module.cjs'), 'module.exports=42;');
+    await writeFile(join(workspace, 'module.mjs'), 'export default 43;');
+    const git = (await execute('where.exe', ['git'])).stdout.trim().split(/\r?\n/)[0];
+    if (!git) throw new Error('Git is required for Windows toolchain qualification');
+    const pipePath = String.raw`\\.\pipe\agentkeeper-mxc-${randomUUID()}`;
+    const pipe = await echoServer(pipePath);
+    servers.push(pipe);
+    const tcp = await echoServer({ host: '127.0.0.1', port: 0 });
+    servers.push(tcp);
+    const hostPort = tcp.server.address().port;
     const config = {
       version: '1.0.0', containment: 'processcontainer',
       // Node otherwise resolves the entrypoint through realpathSync('C:\\').
       // Keep the native filesystem policy intact and test its supported
       // entrypoint option instead of granting recursive access to drive roots.
-      process: { commandLine: `"${process.execPath}" --preserve-symlinks-main "${script}"`, cwd: workspace, timeout: 20_000 },
-      filesystem: { readwritePaths: [workspace], readonlyPaths: [dirname(process.execPath)], deniedPaths: [outside] },
+      process: { commandLine: `"${process.execPath}" --preserve-symlinks --preserve-symlinks-main "${script}" "${outside}" ${hostPort} "${pipePath}" false "${git}"`, cwd: workspace, timeout: 30_000 },
+      filesystem: { readwritePaths: [workspace], readonlyPaths: [dirname(process.execPath), resolve(dirname(git), '..')], deniedPaths: [outside] },
       network: { egress: { default: 'deny' }, ingress: { default: 'deny', hostLoopback: 'deny' } },
       telemetry: { enabled: false },
       // Console runtimes initialise Win32k. Keep clipboard and input injection
       // denied while permitting the runtime's normal subsystem initialisation.
       ui: { disable: false, clipboard: 'none', injection: false },
     };
-    const configPath = join(root, 'policy.json');
-    await writeFile(configPath, JSON.stringify(config));
-    const requestProbe = await execute(executor, ['--probe', configPath], { timeout: 30_000 });
-    report('Microsoft MXC request support', requestProbe.stdout + requestProbe.stderr);
-    if (JSON.parse(requestProbe.stdout).tier !== 'base-container') {
-      throw new Error('Refusing to evaluate a fallback tier');
-    }
     try {
-      const result = await execute(executor, [configPath], { timeout: 35_000, maxBuffer: 256 * 1024 });
-      report('Microsoft MXC confined descendants', result.stdout + result.stderr);
+      for (const pipeAllowed of [false, true]) {
+        if (pipeAllowed) {
+          config.filesystem.readwritePaths.push(pipePath);
+          config.process.commandLine = config.process.commandLine.replace(' false ', ' true ');
+        }
+        const configPath = join(root, `policy-${pipeAllowed}.json`);
+        await writeFile(configPath, JSON.stringify(config));
+        const requestProbe = await execute(executor, ['--probe', configPath], { timeout: 30_000 });
+        report('Microsoft MXC request support', requestProbe.stdout + requestProbe.stderr);
+        if (JSON.parse(requestProbe.stdout).tier !== 'base-container') {
+          throw new Error('Refusing to evaluate a fallback tier');
+        }
+        const result = await execute(executor, [configPath], { timeout: 40_000, maxBuffer: 256 * 1024 });
+        report(`Microsoft MXC toolchain and IPC (pipe allowed: ${pipeAllowed})`, result.stdout + result.stderr);
+      }
     } catch (error) {
       report('Microsoft MXC confined descendants failed', String(error.stdout ?? '') + String(error.stderr ?? ''));
       throw error;
     }
   }
 } finally {
+  await Promise.all(servers.map((server) => server.close()));
   await rm(root, { recursive: true, force: true });
+}
+
+async function echoServer(address) {
+  const sockets = new Set();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('error', () => socket.destroy());
+    socket.once('close', () => sockets.delete(socket));
+    socket.pipe(socket);
+  });
+  await new Promise((resolveListen, reject) => {
+    server.once('error', reject);
+    server.listen(address, resolveListen);
+  });
+  return { server, close: () => new Promise((resolveClose, reject) => {
+    for (const socket of sockets) socket.destroy();
+    server.close((error) => error ? reject(error) : resolveClose());
+  }) };
 }
 
 function report(title, details) {

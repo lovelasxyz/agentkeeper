@@ -137,6 +137,11 @@ try {
   const violations = budgetViolations(measured);
   if (enforce && violations.length > 0) {
     process.stderr.write(`performance budgets exceeded:\n  ${violations.join('\n  ')}\n`);
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const details = JSON.stringify({ measured, violations })
+        .replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+      process.stdout.write(`::error title=Performance budgets exceeded::${details}\n`);
+    }
     process.exit(1);
   }
   if (violations.length > 0) {

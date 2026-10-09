@@ -20,6 +20,13 @@ CI probes found BaseContainer and native filesystem denies on Windows 11 ARM64;
 the Windows Server x64 runner has only the legacy AppContainer tier. These are
 capability observations, not completed end-to-end qualification.
 
+On Windows 11 ARM64, the pinned PSEC executor has now passed workspace writes
+and direct/descendant file denies with Node 22 for inherited, ignored and piped
+stdio. Node's `--preserve-symlinks-main` entrypoint option was necessary to avoid
+an ungranted drive-root metadata query. Module loading, Git, external IPC,
+network brokering and adversarial filesystem aliases require further tests;
+this result alone does not qualify the backend for release.
+
 Actual legacy tests now show working direct isolation, workspace edits,
 concurrency, hardlink/junction refusals and ACL rollback. Inherited descendant
 stdio works on both runners. Node 22 pipe-based descendants hang on both;

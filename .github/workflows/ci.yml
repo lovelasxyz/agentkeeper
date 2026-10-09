@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest, windows-11-arm]
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +34,8 @@ jobs:
       - name: Configure the MSVC toolchain
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ runner.arch == 'ARM64' && 'amd64_arm64' || 'amd64' }}
 
       # Layer 1 on Linux needs bubblewrap. Without it the sandbox suite would
       # skip silently, which is exactly the kind of quiet gap this project is
@@ -68,7 +70,7 @@ jobs:
       - run: npm run build
 
       # After `clean` and `build`, so the helper survives into test:sandbox.
-      - name: Build the Windows AppContainer helper (x64, not shipped)
+      - name: Build the Windows AppContainer helper (runner architecture, not shipped)
         if: runner.os == 'Windows'
         run: npm run build:windows-sandbox
 

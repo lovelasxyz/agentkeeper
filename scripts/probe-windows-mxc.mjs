@@ -2,7 +2,7 @@
 // Nothing is installed into node_modules or assembled into the npm package.
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -25,14 +25,61 @@ try {
   }
   const member = `package/bin/${process.arch}/wxc-exec.exe`;
   await execute('tar.exe', ['-xf', archive, '-C', root, member], { timeout: 30_000 });
-  const { stdout, stderr } = await execute(join(root, member), ['--probe'],
+  const executor = join(root, member);
+  const { stdout, stderr } = await execute(executor, ['--probe'],
     { timeout: 30_000, maxBuffer: 256 * 1024 });
   console.log(stdout);
   if (stderr.trim() !== '') console.log(stderr);
-  if (process.env.GITHUB_ACTIONS === 'true') {
-    const escaped = (stdout + stderr).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
-    console.log(`::notice title=Microsoft MXC host support (${process.arch})::${escaped}`);
+  report('Microsoft MXC host support', stdout + stderr);
+  const host = JSON.parse(stdout);
+  if (host.tier === 'base-container' && host.probes?.baseContainerSupportsDenyPaths === true) {
+    const workspace = join(root, 'workspace');
+    await mkdir(workspace);
+    const outside = join(root, 'outside.secret');
+    await writeFile(outside, 'must not be readable');
+    const script = join(workspace, 'qualification.cjs');
+    await writeFile(script, [
+      "const fs=require('node:fs'),cp=require('node:child_process');",
+      `const outside=${JSON.stringify(outside)};`,
+      "try{fs.readFileSync(outside);process.exit(42)}catch{}",
+      "fs.writeFileSync('inside.txt','ok');",
+      "for(const stdio of ['inherit','ignore','pipe']){",
+      " const code=\"try{require('node:fs').readFileSync(process.argv[1]);process.exit(42)}catch{process.exit(0)}\";",
+      " const child=cp.spawnSync(process.execPath,['-e',code,outside],{stdio,timeout:5000,killSignal:'SIGKILL'});",
+      " console.log(JSON.stringify({stdio,status:child.status,signal:child.signal,error:child.error?.code}));",
+      " if(child.status!==0)process.exit(44);",
+      "}",
+    ].join('\n'));
+    const config = {
+      version: '1.0.0', containment: 'processcontainer',
+      process: { commandLine: `"${process.execPath}" "${script}"`, cwd: workspace, timeout: 20_000 },
+      filesystem: { readwritePaths: [workspace], readonlyPaths: [join(process.execPath, '..')], deniedPaths: [outside] },
+      network: { egress: { default: 'deny' }, ingress: { default: 'deny', hostLoopback: 'deny' } },
+      telemetry: { enabled: false },
+    };
+    const configPath = join(root, 'policy.json');
+    await writeFile(configPath, JSON.stringify(config));
+    const requestProbe = await execute(executor, ['--probe', configPath], { timeout: 30_000 });
+    report('Microsoft MXC request support', requestProbe.stdout + requestProbe.stderr);
+    if (JSON.parse(requestProbe.stdout).tier !== 'base-container') {
+      throw new Error('Refusing to evaluate a fallback tier');
+    }
+    try {
+      const result = await execute(executor, [configPath], { timeout: 35_000, maxBuffer: 256 * 1024 });
+      report('Microsoft MXC confined descendants', result.stdout + result.stderr);
+    } catch (error) {
+      report('Microsoft MXC confined descendants failed', String(error.stdout ?? '') + String(error.stderr ?? ''));
+      throw error;
+    }
   }
 } finally {
   await rm(root, { recursive: true, force: true });
+}
+
+function report(title, details) {
+  console.log(details);
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const escaped = details.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    console.log(`::notice title=${title} (${process.arch})::${escaped}`);
+  }
 }

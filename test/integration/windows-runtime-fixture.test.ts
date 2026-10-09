@@ -1,11 +1,13 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const modulePath = '../../scripts/windows-runtime-fixture.mjs';
-const { copyWindowsRuntime } = await import(modulePath) as {
+const { copyWindowsRuntime, createGitFixtureEnvironment } = await import(modulePath) as {
   copyWindowsRuntime(modules: string[], systemRoot: string, destination: string): Promise<number>;
+  createGitFixtureEnvironment(root: string, environment: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv>;
 };
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -21,6 +23,19 @@ async function fixture() {
 }
 
 describe('disposable Windows runtime fixtures', () => {
+  it('gives Git an ordinary empty config without loading the host global config', async () => {
+    const { root } = await fixture();
+    const hostConfig = join(root, 'host.gitconfig');
+    await writeFile(hostConfig, '[agentkeeper]\nfixture = host-only\n');
+    const original = { ...process.env, GIT_CONFIG_GLOBAL: hostConfig };
+    const env = await createGitFixtureEnvironment(root, original);
+    expect(original.GIT_CONFIG_GLOBAL).toBe(hostConfig);
+    expect(env['GIT_CONFIG_GLOBAL']).not.toBe('NUL');
+    expect(await readFile(env['GIT_CONFIG_GLOBAL']!, 'utf8')).toBe('');
+    expect(execFileSync('git', ['config', '--global', '--list'], { env, encoding: 'utf8' })).toBe('');
+    execFileSync('git', ['init', '--bare', '--quiet', join(root, 'inventory.git')], { env });
+  });
+
   it('keeps the DLL inventories of independently loaded Node and Git separate', async () => {
     const { system, node, git } = await fixture();
     await Promise.all(['arm64', 'x64'].map((arch) => mkdir(join(system, arch))));

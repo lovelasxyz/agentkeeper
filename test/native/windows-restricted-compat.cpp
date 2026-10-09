@@ -224,6 +224,32 @@ HANDLE RestrictedToken(PSID sid, std::vector<BYTE>* user) {
   return token.release();
 }
 
+// Run while impersonating the same restricted token used for Node. These
+// reads identify likely Winsock startup dependencies without changing any
+// registry or system-file permissions. They do not prove WSAStartup succeeds.
+void DiagnoseRuntimeAccess() {
+  for (const auto* path : {
+      L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters",
+      L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9",
+      L"SYSTEM\\CurrentControlSet\\Services\\WinSock2\\Parameters\\NameSpace_Catalog5",
+      L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters"}) {
+    HKEY key = nullptr;
+    const LSTATUS status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key);
+    std::fwprintf(stderr, L"runtime access: HKLM\\%ls KEY_READ win32=%ld\n", path, status);
+    if (key != nullptr) RegCloseKey(key);
+  }
+  wchar_t system[MAX_PATH]{};
+  const UINT length = GetSystemDirectoryW(system, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return;
+  for (const auto* dll : {L"ws2_32.dll", L"mswsock.dll", L"nlaapi.dll", L"dnsapi.dll"}) {
+    const std::wstring path = std::wstring(system) + L"\\" + dll;
+    Handle file(CreateFileW(path.c_str(), GENERIC_READ | GENERIC_EXECUTE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+    const DWORD error = file.get() == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    std::fwprintf(stderr, L"runtime access: %ls read/execute win32=%lu\n", path.c_str(), error);
+  }
+}
+
 int RunProof(const Request& request, DWORD parent, const std::wstring& outside) {
   std::wstring profile;
   SidAllocation profile_sid;
@@ -291,6 +317,7 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
   Handle parent_control(OpenProcess(PROCESS_DUP_HANDLE | PROCESS_VM_WRITE, FALSE, parent));
   Handle canary_control(CreateFileW(outside.c_str(), WRITE_DAC,
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+  DiagnoseRuntimeAccess();
   const bool reverted = RevertToSelf() != FALSE;
   if (!reverted || parent_control.get() || canary_control.get() != INVALID_HANDLE_VALUE) {
     std::fprintf(stderr, "restricted probe: host control was not denied\n");

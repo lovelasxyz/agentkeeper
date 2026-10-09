@@ -100,16 +100,22 @@ stdio works on both runners. Node 22 pipe-based descendants hang on both;
 ignored stdio fails with EPERM on the Server runner and succeeds on Windows 11.
 The required gate stays red until agent subprocess compatibility is resolved.
 
-The separate `windows-restricted-proof.yml` experiment now reaches process
-creation on both hosted runners, but its last verified run exits before the
-Node workload with `STATUS_DLL_NOT_FOUND` (`0xC0000135`). The next revision
-tests disposable, ordinary copies of the OS DLLs used by the host runtimes.
+The separate `windows-restricted-proof.yml` experiment reached process
+creation on both hosted runners, then exited before the Node workload with
+`STATUS_DLL_NOT_FOUND` (`0xC0000135`). It now tests disposable, ordinary copies
+of the OS DLLs used by the host runtimes.
 Node and Git are inventoried separately because their architectures can differ;
 Git must answer a `cat-file --batch` request before its modules are recorded.
 System-file ACLs are not changed. Four portable regressions cover separate
 inventories, independent copies, trusted-path boundaries and DLL collisions.
 These checks validate fixture preparation, not Windows loader compatibility.
-The Windows result is pending. This experiment is not a production backend,
+[Run 37999427949](https://github.com/lovelasxyz/agentkeeper/actions/runs/37999427949)
+passed DLL loading on x64 and reached a later Node startup failure:
+`WSAStartup: (10107)`. ARM64 stopped earlier because native Git rejected `NUL`
+as its global config path. The next revision uses an ordinary empty config
+file, with a real Git regression test, and reports restricted-token read access
+to Winsock registry keys and system DLLs. It does not broaden those permissions
+or claim the Winsock failure is fixed. This experiment is not a production backend,
 does not restrict network access, and does not replace either release gate.
 
 References:

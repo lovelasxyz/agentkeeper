@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { copyWindowsRuntime } from './windows-runtime-fixture.mjs';
+import { copyWindowsRuntime, createGitFixtureEnvironment } from './windows-runtime-fixture.mjs';
 
 if (process.platform !== 'win32') throw new Error('The restricted-token experiment requires Windows');
 const execute = promisify(execFile);
@@ -54,7 +54,7 @@ try {
   // different process, so use the runtime executable directly in this proof.
   const installedRuntimeGit = join(gitRoot, prefix, 'bin/git.exe');
   const gitDatabase = join(root, 'inventory.git');
-  const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: 'NUL' };
+  const gitEnv = await createGitFixtureEnvironment(root, process.env);
   await execute(installedRuntimeGit, ['init', '--bare', '--quiet', gitDatabase],
     { env: gitEnv, timeout: 15_000 });
   const gitProcess = execute(installedRuntimeGit, [`--git-dir=${gitDatabase}`, 'cat-file', '--batch'],

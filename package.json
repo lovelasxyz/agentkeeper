@@ -59,7 +59,7 @@
     "test:e2e": "vitest run --project e2e",
     "test:all": "vitest run",
     "coverage": "vitest run --project unit --project integration --coverage",
-    "lint:arch": "depcruise src --config .dependency-cruiser.cjs",
+    "lint:arch": "depcruise src scripts/probe-windows-mxc.mjs --config .dependency-cruiser.cjs",
     "verify": "npm run typecheck && npm run lint:arch && npm run coverage && npm run test:sandbox",
     "verify:windows": "node scripts/verify-windows.mjs",
     "verify:package": "node scripts/verify-package.mjs",

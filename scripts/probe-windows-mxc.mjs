@@ -5,15 +5,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { assessWindowsPsecHost } from '../src/infrastructure/sandbox/WindowsPsecSupport.ts';
+import { buildWindowsPsecProbe } from './build-windows-psec-probe.mjs';
 
 if (process.platform !== 'win32') throw new Error('MXC host qualification requires Windows');
 if (!['x64', 'arm64'].includes(process.arch)) throw new Error('Unsupported Windows architecture');
 const npm = process.env.npm_execpath;
 if (npm === undefined) throw new Error('Run through npm run probe:windows-mxc');
 const execute = promisify(execFile);
+const compat = await buildWindowsPsecProbe();
 const integrity = 'sha512-7aVR+GHVKveIknZmUtkAEFwUBp61qgEmhJRe1ZyKHJ274yWlKWB/ZfDP/u/whfmDyck0wRNKZN49atlF+SZt2Q==';
 // Policy paths and cwd must agree on long names, including the runner's
 // RUNNER~1 temporary-directory alias. Resolve them on the trusted host.
@@ -52,8 +54,9 @@ try {
     await writeFile(join(workspace, 'module.mjs'), 'export default 43;');
     const git = (await execute('where.exe', ['git'])).stdout.trim().split(/\r?\n/)[0];
     if (!git) throw new Error('Git is required for Windows toolchain qualification');
-    const compat = fileURLToPath(new URL('../build/windows-psec-compat.exe', import.meta.url));
-    await readFile(compat);
+    const nativeReport = JSON.parse((await execute(compat, ['--host'], { timeout: 15_000 })).stdout);
+    const prerequisites = assessWindowsPsecHost(nativeReport);
+    report('Windows PSEC native prerequisites', JSON.stringify({ nativeReport, prerequisites }));
     const pipePath = String.raw`\\.\pipe\agentkeeper-mxc-${randomUUID()}`;
     const pipe = await echoServer(pipePath);
     servers.push(pipe);
@@ -73,13 +76,19 @@ try {
       // denied while permitting the runtime's normal subsystem initialisation.
       ui: { disable: false, clipboard: 'none', injection: false },
     };
+    if (prerequisites.supported) {
+      config.processContainer = { filesystem: {
+        enumeratePaths: [...new Set([workspace, process.execPath, git, compat].map((path) => parse(path).root))],
+      } };
+    }
     try {
       let failed = false;
       for (const pipeAllowed of [false, true]) {
         if (pipeAllowed) {
           config.filesystem.readwritePaths.push(pipePath);
         }
-        config.process.commandLine = `"${process.execPath}" --preserve-symlinks --preserve-symlinks-main "${script}" "${outside}" ${hostPort} "${pipePath}" ${pipeAllowed} "${git}" "${compat}"`;
+        const entryOptions = prerequisites.supported ? '' : '--preserve-symlinks --preserve-symlinks-main ';
+        config.process.commandLine = `"${process.execPath}" ${entryOptions}"${script}" "${outside}" ${hostPort} "${pipePath}" ${pipeAllowed} "${git}" "${compat}"`;
         const configPath = join(root, `policy-${pipeAllowed}.json`);
         await writeFile(configPath, JSON.stringify(config));
         try {
@@ -99,6 +108,7 @@ try {
         }
       }
       if (failed) throw new Error('Windows PSEC toolchain/IPC qualification failed');
+      if (!prerequisites.supported) throw new Error(`${prerequisites.code}: ${prerequisites.message}`);
     } catch (error) {
       report('Microsoft MXC confined descendants failed', String(error.stdout ?? '') + String(error.stderr ?? ''));
       throw error;

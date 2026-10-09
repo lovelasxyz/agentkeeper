@@ -13,6 +13,10 @@ process security environment (PSEC/BaseContainer); the legacy AppContainer
 launcher below remains a qualification candidate, not an approved fallback.
 Runtime capability checks must reject unsupported hosts and policies before
 starting an agent. A Windows version string alone does not establish support.
+The selected contract requires PSEC 1.1 and native filesystem deny,
+enumeration-only metadata and ingress support (support bits `0x1`, `0x4`,
+`0x8`). The developer qualification validates the actual Win32 version/support
+queries with the same typed prerequisite assessor covered by regression tests.
 
 The developer-only `probe:windows-mxc` command evaluates Microsoft's pinned
 MXC 1.0.0 native executor without adding a runtime dependency or packaging it.
@@ -26,6 +30,29 @@ stdio. Node's `--preserve-symlinks-main` entrypoint option was necessary to avoi
 an ungranted drive-root metadata query. Module loading, Git, external IPC,
 network brokering and adversarial filesystem aliases require further tests;
 this result alone does not qualify the backend for release.
+
+Further real tests passed CommonJS/ESM loading, refusal to create an outside
+hardlink, a pre-opened host IPC handle and deny-default reads of an outside
+file with no explicit deny entry. They found these remaining incompatibilities:
+
+- Git `init`/`status` cannot query the working directory. A native x64 Win32
+  probe confirms `GetFinalPathNameByHandleW` fails with `ERROR_ACCESS_DENIED`
+  for both normalized and opened names, even with canonical long paths.
+- The tested host does not advertise enumeration-only metadata or native
+  ingress support. Recursive read access to a drive root is not an acceptable
+  substitute for enumeration-only access.
+- An ungranted host named pipe is denied. Granting its path still does not make
+  it usable; an IPC broker design cannot assume filesystem grants authorize
+  named pipes.
+- Deny-default network policy blocks an echo connection even within the same
+  sandbox process. A TCP relay needs its own demonstrated policy; a Linux-style
+  localhost relay cannot be assumed to work unchanged.
+
+The separate `windows-psec` CI job runs these native tests independently of the
+dependency install and legacy launcher. Packaging depends on it. On a host
+that qualifies for PSEC 1.1, the proof requests enumeration-only drive metadata
+and tests ordinary Node entrypoint/module resolution without symlink flags.
+Passing host prerequisites alone still does not qualify the product.
 
 Actual legacy tests now show working direct isolation, workspace edits,
 concurrency, hardlink/junction refusals and ACL rollback. Inherited descendant
@@ -102,6 +129,7 @@ On Windows, in an MSVC developer environment with Node installed:
 ```sh
 npm ci
 npm run verify:windows
+npm run probe:windows-mxc
 ```
 
 That command builds the actual helper and runs the real isolation suite as a
@@ -110,6 +138,11 @@ suite exercises direct/descendant deny canaries, ordinary workspace edits,
 stdio, reserved child exit codes, timeout followed by a fresh launch,
 concurrent sessions, pre-existing hardlinks, junctions and denied loopback.
 Portable tests and source assertions cannot substitute for these OS tests.
+
+`probe:windows-mxc` compiles the developer-only Win32 diagnostic using the
+configured MSVC target before exercising the pinned executor. CI targets x64
+for this diagnostic on Windows 11 ARM64, matching Git's emulated x64 ABI. This
+does not substitute for qualification on a physical Windows 11 x64 host.
 
 ## Still required before shipping
 

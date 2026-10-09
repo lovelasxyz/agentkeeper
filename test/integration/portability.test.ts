@@ -73,28 +73,21 @@ describe('build and CI portability', () => {
     );
   });
 
-  it('builds the Windows helper in CI, runs the suite advisory, and still ships nothing native', () => {
-    // The AppContainer backend is not shipped (its canary never passed), but
-    // the helper is compiled and the suite is exercised on every push so the
-    // failure — with the instrumented canary's last stage — is *observed* on
-    // real Windows hardware rather than reasoned about.
+  it('requires Windows qualification in CI while keeping the native candidate out of releases', () => {
+    // Qualification failures fail CI even while the candidate is unreleased.
     const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8');
 
     expect(workflow).toMatch(/windows-latest/);
     expect(workflow).toMatch(/msvc-dev-cmd/);
     expect(workflow).toMatch(/npm run build:windows-sandbox/);
 
-    // Exactly one advisory step in either workflow: the Windows sandbox
-    // suite, and only until its deny canary passes. A relaxation anywhere
-    // else would quietly stop gating a release.
+    // Platform failures must not be converted into a successful check.
     for (const relative of ['.github/workflows/ci.yml', '.github/workflows/publish.yml']) {
       const text = readFileSync(join(repository, relative), 'utf8');
-      expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(
-        relative.includes('ci.yml') ? 1 : 0,
-      );
+      expect(text.match(/continue-on-error: true/g) ?? [], relative).toHaveLength(0);
     }
     expect(workflow).toMatch(
-      /Sandbox isolation tests \(Windows[^\r\n]*\s+if: runner\.os == 'Windows'\s+continue-on-error: true/,
+      /Sandbox isolation tests \(Windows qualification gate\)\s+if: runner\.os == 'Windows'/,
     );
   });
 

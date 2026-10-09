@@ -69,6 +69,10 @@ jobs:
       - run: npm run clean
       - run: npm run build
 
+      - name: Probe Microsoft MXC host support (qualification only)
+        if: runner.os == 'Windows'
+        run: npm run probe:windows-mxc
+
       # After `clean` and `build`, so the helper survives into test:sandbox.
       - name: Build the Windows AppContainer helper (runner architecture, not shipped)
         if: runner.os == 'Windows'

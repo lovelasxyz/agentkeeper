@@ -50,6 +50,7 @@
     "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
     "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
     "test:windows-native": "node scripts/test-windows-native.mjs",
+    "probe:windows-mxc": "node scripts/probe-windows-mxc.mjs",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --project unit --project integration",

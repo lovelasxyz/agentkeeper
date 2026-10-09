@@ -80,18 +80,22 @@ try {
     execFileSync(process.execPath, ['-e', '0'], { stdio: 'ignore' }),
   );
 
-  // What any wrapper that spawns a sandboxed command pays before doing anything
-  // of its own: one interpreter start-up plus the platform mechanism. Only
-  // macOS has `sandbox-exec`; measuring it elsewhere just crashes the run.
-  const spawnFloor =
-    process.platform === 'darwin'
-      ? bareNode +
-        fastest(() =>
-          execFileSync('/usr/bin/sandbox-exec', ['-f', nullProfile, process.execPath, '-e', '0'], {
-            stdio: 'ignore',
-          }),
-        )
-      : 2 * bareNode;
+  // Charge the platform mechanism consistently. The Linux floor also creates
+  // the namespaces and session used by the real wrapper, with a trivial trusted
+  // payload; a bare Node launch cannot measure bubblewrap's kernel work.
+  // Broad read-only binds here are only a benchmark baseline, never an agent
+  // policy. The wrapper below still exercises its actual confinement policy.
+  const platformLaunch = process.platform === 'darwin'
+    ? () => execFileSync('/usr/bin/sandbox-exec', ['-f', nullProfile, process.execPath, '-e', '0'], {
+      stdio: 'ignore',
+    })
+    : process.platform === 'linux'
+      ? () => execFileSync('bwrap', ['--ro-bind', '/', '/', '--unshare-all', '--die-with-parent',
+        '--new-session', '--proc', '/proc', '--dev', '/dev', '--', process.execPath, '-e', '0'], {
+        stdio: 'ignore',
+      })
+      : null;
+  const spawnFloor = platformLaunch === null ? 2 * bareNode : bareNode + fastest(platformLaunch);
 
   const hook = fastest(() =>
     execFileSync(process.execPath, [BIN, 'hook', 'pretooluse'], {
@@ -127,7 +131,8 @@ try {
     // compiled binary and is reported separately rather than hidden.
     hookOwnCost: round(hook - bareNode),
     scanOwnCost: round(scan - bareNode),
-    // What the user feels in total when running an agent through the wrapper.
+    // Total overhead still includes namespace creation and sandbox cost, and
+    // retains its independent budget even when the mechanism floor is high.
     wrapperTotalOverhead: round(wrapper - bareNode),
     // Of that, the part this project can actually do something about.
     wrapperOwnCost: round(wrapper - spawnFloor),

@@ -2,7 +2,7 @@
 // Nothing is installed into node_modules or assembled into the npm package.
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -14,7 +14,9 @@ const npm = process.env.npm_execpath;
 if (npm === undefined) throw new Error('Run through npm run probe:windows-mxc');
 const execute = promisify(execFile);
 const integrity = 'sha512-7aVR+GHVKveIknZmUtkAEFwUBp61qgEmhJRe1ZyKHJ274yWlKWB/ZfDP/u/whfmDyck0wRNKZN49atlF+SZt2Q==';
-const root = await mkdtemp(join(tmpdir(), 'agentkeeper-mxc-probe-'));
+// Policy paths and cwd must agree on long names, including the runner's
+// RUNNER~1 temporary-directory alias. Resolve them on the trusted host.
+const root = await realpath(await mkdtemp(join(tmpdir(), 'agentkeeper-mxc-probe-')));
 const servers = [];
 try {
   const packed = await execute(process.execPath, [npm, 'pack', '@microsoft/mxc-sdk@1.0.0',
@@ -65,21 +67,29 @@ try {
       ui: { disable: false, clipboard: 'none', injection: false },
     };
     try {
+      let failed = false;
       for (const pipeAllowed of [false, true]) {
         if (pipeAllowed) {
           config.filesystem.readwritePaths.push(pipePath);
-          config.process.commandLine = config.process.commandLine.replace(' false ', ' true ');
         }
+        config.process.commandLine = `"${process.execPath}" --preserve-symlinks --preserve-symlinks-main "${script}" "${outside}" ${hostPort} "${pipePath}" ${pipeAllowed} "${git}"`;
         const configPath = join(root, `policy-${pipeAllowed}.json`);
         await writeFile(configPath, JSON.stringify(config));
-        const requestProbe = await execute(executor, ['--probe', configPath], { timeout: 30_000 });
-        report('Microsoft MXC request support', requestProbe.stdout + requestProbe.stderr);
-        if (JSON.parse(requestProbe.stdout).tier !== 'base-container') {
-          throw new Error('Refusing to evaluate a fallback tier');
+        try {
+          const requestProbe = await execute(executor, ['--probe', configPath], { timeout: 30_000 });
+          report('Microsoft MXC request support', requestProbe.stdout + requestProbe.stderr);
+          if (JSON.parse(requestProbe.stdout).tier !== 'base-container') {
+            throw new Error('Refusing to evaluate a fallback tier');
+          }
+          const result = await execute(executor, [configPath], { timeout: 40_000, maxBuffer: 256 * 1024 });
+          report(`Microsoft MXC toolchain and IPC (pipe allowed: ${pipeAllowed})`, result.stdout + result.stderr);
+        } catch (error) {
+          failed = true;
+          report(`Microsoft MXC toolchain and IPC failed (pipe allowed: ${pipeAllowed})`,
+            String(error.stdout ?? '') + String(error.stderr ?? '') + '\n' + error.message);
         }
-        const result = await execute(executor, [configPath], { timeout: 40_000, maxBuffer: 256 * 1024 });
-        report(`Microsoft MXC toolchain and IPC (pipe allowed: ${pipeAllowed})`, result.stdout + result.stderr);
       }
+      if (failed) throw new Error('Windows PSEC toolchain/IPC qualification failed');
     } catch (error) {
       report('Microsoft MXC confined descendants failed', String(error.stdout ?? '') + String(error.stderr ?? ''));
       throw error;

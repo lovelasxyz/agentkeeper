@@ -85,6 +85,15 @@ JSON. The full qualification cross-checks this report against independently
 compiled C++ Win32 calls before using its prerequisites. A supported report is
 only the prerequisite to run the actual sandbox tests.
 
+On October 10, 2026, the read-only
+[hosted runner inventory](https://github.com/lovelasxyz/agentkeeper/actions/runs/37995156205)
+confirmed that **both `windows-11-arm` and `windows-11-vs2026-arm`** expose
+build **26200.9457**, PSEC **1.0** and support mask **`0x3`**. Changing between
+these labels does not supply the selected prerequisites. The successful
+inventory workflow does not qualify Windows support. With hosted CI as the
+only available Windows test environment, the PSEC candidate remains
+unfinished and unreleased; development of a separate service backend is deferred.
+
 Actual legacy tests now show working direct isolation, workspace edits,
 concurrency, hardlink/junction refusals and ACL rollback. Inherited descendant
 stdio works on both runners. Node 22 pipe-based descendants hang on both;

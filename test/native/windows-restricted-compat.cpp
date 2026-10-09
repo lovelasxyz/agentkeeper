@@ -176,7 +176,7 @@ HANDLE RestrictedToken(PSID sid, std::vector<BYTE>* user) {
   if (!GetTokenInformation(original.get(), TokenUser, user->data(), size, &size)) return nullptr;
   std::vector<BYTE> common(SECURITY_MAX_SID_SIZE), admin(SECURITY_MAX_SID_SIZE);
   DWORD common_size = static_cast<DWORD>(common.size()), admin_size = static_cast<DWORD>(admin.size());
-  if (!CreateWellKnownSid(WinBuiltinAnyPackageSid, nullptr, common.data(), &common_size) ||
+  if (!CreateWellKnownSid(WinRestrictedCodeSid, nullptr, common.data(), &common_size) ||
       !CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admin.data(), &admin_size)) return nullptr;
   SID_AND_ATTRIBUTES restricted[] = {{sid, 0}, {common.data(), 0}};
   SID_AND_ATTRIBUTES disabled{admin.data(), 0};
@@ -254,7 +254,7 @@ int RunProof(const Request& request, DWORD parent, const std::wstring& outside) 
       !ValidateAclObjects(request, grants, denies, &pins)) return finish(kUnsafePath);
   std::fprintf(stderr, "restricted probe: applying workspace/toolchain ACLs\n");
   AclMutationGuard mutation;
-  if (!mutation.Lock() || !OpenAclObjects(&grants, true) ||
+  if (!mutation.Lock() || !OpenAclObjects(&grants, false) ||
       !ApplyAclChanges(grants, sid.get(), GRANT_ACCESS, &applied)) {
     mutation.Unlock();
     return finish(kAclFailed);

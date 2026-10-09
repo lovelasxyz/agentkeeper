@@ -1,8 +1,8 @@
 # Production readiness
 
 An honest account of what is finished, what is not, and what would have to be
-true before the word "finished" is fair. Written against the unreleased tree
-after the 1.0.4 hardening cycle.
+true before the word "finished" is fair. Windows findings are updated against
+the unreleased 2.1.2 tree; the earlier hardening history is retained below.
 
 ## The verdict
 
@@ -10,7 +10,7 @@ after the 1.0.4 hardening cycle.
 |---|---|---|
 | macOS | **Production-ready, with named gaps** | The boundary holds against the adversarial suite run against the published package. Tier 2 is denied and proven denied — now including `/var/root`, the local account database, `sudoers` and the system launchd directories, with the machine keychain probed live through its firmlink. Gaps are reported on every run and carry stable reason codes. |
 | Linux | **Credible, under-verified** | The design is stronger than macOS — empty home, explicit mounts, no route to the host. But it has only ever been exercised in CI, never driven by hand on a real desktop under a real agent. |
-| Windows | **Unprotected, honestly; under active observation** | No helper ships: the AppContainer child never exited and its canary never passed, so the package gate refuses `dist/native/` and the platform reports `UNPROTECTED`. The backend lives in the tree, compiles on every CI run, and its instrumented canary reports the furthest stage reached on real Windows hardware every push — the failure is observed, not theorised. |
+| Windows | **Unprotected; release blocked** | No helper ships, and the package gate refuses `dist/native/`. The legacy AppContainer candidate fails Node pipe-based descendants. The selected Windows 11 PSEC direction fixes stdio in developer tests, but Git, network transport and pre-existing hardlinks remain blockers. The available Windows 11 host lacks PSEC 1.1 prerequisites. See [native qualification evidence](windows-validation.md). |
 
 What changed since 1.0.4, in one paragraph: an upgrade now reaches the watcher
 on its own (`activate`/`repair` restart a stale daemon, and the daemon reads
@@ -69,7 +69,7 @@ gated by the same canary the other two platforms pass.
 
 | # | Item | State | Honest weight |
 |---|---|---|---|
-| 1 | AppContainer child never exits | **Blocked, but observed** | The backend is in-tree and compiled per push; the instrumented canary reports its furthest stage on the GitHub-hosted runner, so the failure point comes from hardware, not from reasoning. No helper ships until the suite passes on Windows 10/11 x64 and arm64 and becomes a gate. |
+| 1 | Native Windows backend | **Unfinished; observed blockers** | Target Windows 11 with current updates, x64/ARM64. The available host exposes PSEC 1.0, not the required 1.1 metadata/ingress features. Raw PSEC tests reproduce outside-file reads and writes through pre-existing workspace hardlinks; the future launcher must refuse unsafe topology. Git, destination brokering, authentication and interactive sessions still need implementation/qualification. CI packaging and npm publishing share a mandatory native gate. Windows 10 is outside this release. |
 | 2 | Linux never driven by hand | **Open** | Everything known about the Linux backend comes from CI. Before claiming production readiness there it needs the adversarial session macOS got, on a real desktop, with a real agent. |
 | 3 | `/private/var/at/tabs` unwatched without Full Disk Access | **Named, and shown** | A platform limit, not a defect: the directory is root-only. Reported as `daemon.watch.degraded` by the daemon and *quoted by `doctor`* from the watcher's self-report, so the gap is visible without reading the audit log. |
 | 4 | Narrowing `seatbelt.broad-system-read` | **Deliberate, shrunk again** | The machine keychain, SSH host keys, `/var/root`, the local account database, `sudoers` and the system launchd directories are explicit tier 2 denies. What remains readable is system-owned and world-readable; the enumerated allowlist is a dead end (it crashes the runtime before `main()`). |
@@ -80,8 +80,9 @@ hermetic, the performance budgets gate CI, each platform runs its own service
 strategy with a contract test, the hot question is asked once per decision,
 registry invariants are construction-time, the notification policy is a domain
 value, and a degraded watcher is quoted by `doctor` rather than buried in the
-log. What is left is hardware (Windows), a platform permission (crontab,
-shown), and a manual session on a real Linux desktop.
+log. Windows now has a separate unfinished implementation and qualification
+track, described above. Other remaining items include a platform permission
+(crontab, shown) and a manual session on a real Linux desktop.
 
 The pattern from 1.0.4's breakages — *asserting a fact about the outside world
 instead of observing it* — now has its mechanical rule applied at the seams
@@ -116,9 +117,11 @@ a contract-tested strategy per platform.
 The project may be called finished when all of the following are true, and the
 first two are the ones that matter:
 
-1. **macOS and Linux gate the release with passing deny canaries, in a process
-   and its child — and Windows either joins them or ships no backend.** ✔ Held:
-   macOS/Linux gate; Windows ships nothing and reports `UNPROTECTED`.
+1. **macOS, Linux and supported Windows 11 hosts gate the release with passing
+   direct and descendant deny canaries, a usable toolchain and enforced network
+   policy.** Not complete: macOS/Linux gate; Windows ships nothing and reports
+   `UNPROTECTED`. Its mandatory native qualification currently blocks both CI
+   packaging and npm publication.
 2. **An upgrade is sufficient on its own.** ✔ Held: restart on `activate` and
    `repair`, plus the daemon's own observation of the installed manifest.
 3. **Every OS boundary observes rather than assumes.** Launchd release is

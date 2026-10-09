@@ -1,7 +1,9 @@
 import { createServer } from 'node:net';
+import { execFile } from 'node:child_process';
 import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NodeSandboxProbe } from '../../src/infrastructure/sandbox/NodeSandboxProbe.js';
 import { WindowsSandboxRunner } from '../../src/infrastructure/sandbox/WindowsSandboxRunner.js';
@@ -11,6 +13,7 @@ import { AbsolutePath } from '../../src/domain/value-objects/AbsolutePath.js';
 import { ResourceRef } from '../../src/domain/value-objects/ResourceRef.js';
 
 const describeOnWindows = process.platform === 'win32' ? describe : describe.skip;
+const executeFile = promisify(execFile);
 
 describeOnWindows('isolation actually isolates (Windows / AppContainer)', () => {
   const runner = new WindowsSandboxRunner();
@@ -142,6 +145,34 @@ describeOnWindows('isolation actually isolates (Windows / AppContainer)', () => 
     expect((await runScript('process.exit(0)')).exitCode).toBe(0);
   });
 
+  it.each(['normal', 'timeout'] as const)('removes workspace capabilities after %s exit', async (mode) => {
+    const directory = workspace.join(`acl-cleanup-${mode}`);
+    const existing = directory.join('existing.txt');
+    const created = directory.join('created.txt');
+    await mkdir(directory.value);
+    await writeFile(existing.value, 'original');
+    const paths = [workspace.value, directory.value, existing.value];
+    const before = await Promise.all(paths.map(readDacl));
+    try {
+      const script = [
+        "const fs=require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(created.value)}, 'created');`,
+        ...(mode === 'timeout' ? ['setInterval(()=>{},1000);'] : []),
+      ].join('');
+      if (mode === 'timeout') {
+        await expect(runScript(script, 2000)).rejects.toMatchObject({ code: 'windows.child-timed-out' });
+      } else {
+        expect((await runScript(script)).exitCode).toBe(0);
+      }
+      expect(await Promise.all(paths.map(readDacl))).toEqual(before);
+      // A file created during the session must lose the ephemeral package SID
+      // too. Removing just the root ACE does not prove recursive rollback.
+      expect(await readDacl(created.value)).not.toMatch(/S-1-15-2-\d+-/);
+    } finally {
+      await rm(directory.value, { recursive: true, force: true });
+    }
+  });
+
   it('supports concurrent sessions without losing each other\'s workspace ACEs', async () => {
     const results = await Promise.all(Array.from({ length: 4 }, (_, index) => runScript([
       "const fs=require('node:fs');",
@@ -205,4 +236,16 @@ function windowsEnvironment(): Readonly<Record<string, string>> {
   return Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
+}
+
+async function readDacl(path: string): Promise<string> {
+  const windows = process.env['SystemRoot'];
+  if (windows === undefined) throw new Error('Windows directory is unavailable');
+  const { stdout } = await executeFile(
+    join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+      "$ErrorActionPreference='Stop'; (Get-Acl -LiteralPath $env:AGENTKEEPER_TEST_ACL_PATH).GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)"],
+    { env: { ...process.env, AGENTKEEPER_TEST_ACL_PATH: path }, timeout: 10_000 },
+  );
+  return stdout.trim();
 }

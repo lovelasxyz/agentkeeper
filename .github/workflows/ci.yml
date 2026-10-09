@@ -86,6 +86,7 @@ jobs:
         shell: pwsh
         run: |
           $output = npm run test:sandbox 2>&1 | Out-String
+          $suiteExit = $LASTEXITCODE
           Write-Output $output
           $tail = ($output -split "`n" | Select-Object -Last 40) -join "`n"
           @(
@@ -95,7 +96,14 @@ jobs:
             $tail.TrimEnd(),
             '```'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($suiteExit -ne 0) {
+            # Annotations are available through the public Checks API even
+            # when downloading the job log requires an authenticated session.
+            $details = (($output -split "`n" | Select-Object -Last 160) -join "`n")
+            $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows sandbox qualification::$details"
+            exit $suiteExit
+          }
 
       - name: End-to-end install lifecycle
         if: runner.os != 'Windows'
